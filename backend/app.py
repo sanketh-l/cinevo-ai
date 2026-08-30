@@ -182,7 +182,7 @@ def generate_video():
     get_sb().table("clips").insert(clip).execute()
 
     try:
-        trigger_github_action(data, job_id)
+        trigger_github_action(data, job_id, clip_id)
     except Exception:
         pass
 
@@ -331,7 +331,7 @@ def export_status(project_id):
     return jsonify(result.data[0])
 
 # ── GitHub Actions Trigger ──────────────────────────────
-def trigger_github_action(data, job_id):
+def trigger_github_action(data, job_id, clip_id):
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         return
@@ -343,6 +343,7 @@ def trigger_github_action(data, job_id):
         "event_type": "generate_video",
         "client_payload": {
             "job_id": job_id,
+            "clip_id": clip_id,
             "prompt": data.get("prompt", ""),
             "ingredient_ids": data.get("ingredient_ids", []),
             "camera_settings": data.get("camera_settings", {}),
@@ -352,7 +353,7 @@ def trigger_github_action(data, job_id):
     }
     try:
         httpx.post(
-            "https://api.github.com/repos/sanketh-l/cinevo-gpu/dispatches",
+            "https://api.github.com/repos/sanketh-l/cinevo-ai/dispatches",
             headers=headers,
             json=payload,
             timeout=10,

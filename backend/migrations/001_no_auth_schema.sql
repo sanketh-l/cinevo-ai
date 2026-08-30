@@ -109,3 +109,7 @@ create index if not exists idx_ingredients_user on ingredients(user_id);
 create index if not exists idx_ingredients_project on ingredients(project_id);
 create index if not exists idx_clips_project on clips(project_id);
 create index if not exists idx_exports_project on exports(project_id);
+
+insert into storage.buckets (id, name, public)
+values ('videos', 'videos', true)
+on conflict (id) do update set public = true;

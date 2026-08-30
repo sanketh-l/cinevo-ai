@@ -1,0 +1,53 @@
+name: Generate Video
+
+on:
+  repository_dispatch:
+    types: [generate_video]
+  workflow_dispatch:
+    inputs:
+      clip_id:
+        required: true
+        type: string
+      job_id:
+        required: true
+        type: string
+      prompt:
+        required: true
+        type: string
+      duration_sec:
+        required: false
+        default: "8"
+        type: string
+      aspect_ratio:
+        required: false
+        default: "16:9"
+        type: string
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Generate fallback video and update Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DISPATCH_CLIP_ID: ${{ github.event.client_payload.clip_id || inputs.clip_id }}
+          DISPATCH_JOB_ID: ${{ github.event.client_payload.job_id || inputs.job_id }}
+          DISPATCH_PROMPT: ${{ github.event.client_payload.prompt || inputs.prompt }}
+          DISPATCH_DURATION: ${{ github.event.client_payload.duration_sec || inputs.duration_sec }}
+          DISPATCH_ASPECT_RATIO: ${{ github.event.client_payload.aspect_ratio || inputs.aspect_ratio }}
+        run: python gpu-runner/fallback_video.py
