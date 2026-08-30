@@ -140,10 +140,13 @@ export default function ProjectPage() {
       if (mode === "image") {
         const res = await generateApi.image({
           prompt: currentPrompt,
+          project_id: projectId,
+          ingredient_ids: selectedIngredients,
+          position: clips.length,
           width: aspectRatio === "9:16" ? 720 : 1280,
           height: aspectRatio === "9:16" ? 1280 : 720,
         });
-        const newClip: Clip = {
+        const newClip = res.data.clip ?? {
           id: `img_${Date.now()}`,
           project_id: projectId,
           position: clips.length,
@@ -156,7 +159,7 @@ export default function ProjectPage() {
           status: "ready",
           job_id: null,
           created_at: new Date().toISOString(),
-        };
+        } as Clip;
         addClip(newClip);
         setPreviewClip(newClip);
       } else {
@@ -338,10 +341,8 @@ export default function ProjectPage() {
                     <Input placeholder="Search..." value={ingredientSearch} onChange={(e) => setIngredientSearch(e.target.value)} className="bg-white/5 border-white/5 text-white text-xs h-8 pl-8 placeholder:text-white/20" />
                   </div>
                   <Dialog open={ingredientDialogOpen} onOpenChange={setIngredientDialogOpen}>
-                    <DialogTrigger>
-                      <Button size="sm" className="bg-white text-black hover:bg-white/90 h-8 w-8 p-0 rounded-lg">
+                    <DialogTrigger render={<Button size="sm" className="bg-white text-black hover:bg-white/90 h-8 w-8 p-0 rounded-lg" />}>
                         <Plus className="w-3.5 h-3.5" />
-                      </Button>
                     </DialogTrigger>
                     <DialogContent className="bg-[#161616] border-white/10 rounded-2xl max-w-md mx-4">
                       <DialogHeader>
@@ -393,10 +394,8 @@ export default function ProjectPage() {
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-xs text-white/40">Collections</span>
                   <Dialog open={collectionDialogOpen} onOpenChange={setCollectionDialogOpen}>
-                    <DialogTrigger>
-                      <Button size="sm" variant="ghost" className="h-7 text-xs text-white/50 hover:text-white">
+                    <DialogTrigger render={<Button size="sm" variant="ghost" className="h-7 text-xs text-white/50 hover:text-white" />}>
                         <Plus className="w-3 h-3 mr-1" /> New
-                      </Button>
                     </DialogTrigger>
                     <DialogContent className="bg-[#161616] border-white/10 rounded-2xl mx-4">
                       <DialogHeader>

@@ -65,12 +65,10 @@ export default function DashboardPage() {
           <span className="text-white font-semibold text-base sm:text-lg tracking-tight">Cinevo</span>
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger>
-            <Button className="bg-white text-black hover:bg-white/90 rounded-full px-3 sm:px-4 h-8 sm:h-9 text-xs sm:text-sm font-medium">
+          <DialogTrigger render={<Button className="bg-white text-black hover:bg-white/90 rounded-full px-3 sm:px-4 h-8 sm:h-9 text-xs sm:text-sm font-medium" />}>
               <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1 sm:mr-1.5" />
               <span className="hidden sm:inline">New Project</span>
               <span className="sm:hidden">New</span>
-            </Button>
           </DialogTrigger>
           <DialogContent className="bg-[#161616] border-white/10 rounded-2xl mx-4 max-w-md">
             <DialogHeader>

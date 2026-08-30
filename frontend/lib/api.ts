@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
+  baseURL: process.env.NEXT_PUBLIC_API_URL || "",
   headers: { "Content-Type": "application/json" },
 });
 
@@ -96,8 +96,8 @@ export const generateApi = {
     aspect_ratio?: string;
     position?: number;
   }) => api.post<{ job_id: string; clip_id: string; status: string }>("/api/generate/video", data),
-  image: (data: { prompt: string; width?: number; height?: number; seed?: number }) =>
-    api.post<{ image_url: string }>("/api/generate/image", data),
+  image: (data: { prompt: string; project_id?: string; ingredient_ids?: string[]; width?: number; height?: number; seed?: number; position?: number }) =>
+    api.post<{ image_url: string; clip?: Clip }>("/api/generate/image", data),
   status: (jobId: string) => api.get<{ status: string; video_url: string | null; clip_id: string }>(`/api/generate/${jobId}/status`),
   voices: () => api.get<Voice[]>("/api/generate/voices"),
   voiceover: (data: { text: string; voice?: string; clip_id?: string }) =>

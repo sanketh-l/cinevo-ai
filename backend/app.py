@@ -11,6 +11,11 @@ import httpx
 app = Flask(__name__)
 CORS(app, origins=["*"])
 
+@app.errorhandler(Exception)
+def handle_error(error):
+    message = str(error)
+    return jsonify({"error": message or "Internal server error"}), 500
+
 _sb = None
 
 def get_sb():
@@ -168,8 +173,8 @@ def generate_video():
         "project_id": data.get("project_id", ""),
         "position": data.get("position", 0),
         "prompt": data.get("prompt", ""),
-        "ingredients_used": json.dumps(data.get("ingredient_ids", [])),
-        "camera_settings": json.dumps(data.get("camera_settings", {})),
+        "ingredients_used": data.get("ingredient_ids", []),
+        "camera_settings": data.get("camera_settings", {}),
         "duration_sec": data.get("duration_sec", 8),
         "status": "queued",
         "job_id": job_id,
@@ -192,6 +197,26 @@ def generate_image():
     seed = data.get("seed", int(time.time()))
     encoded_prompt = urllib.parse.quote(prompt)
     url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={w}&height={h}&model=flux&nologo=true&seed={seed}"
+
+    project_id = data.get("project_id")
+    if project_id:
+        clip_id = str(uuid.uuid4())
+        clip = {
+            "id": clip_id,
+            "project_id": project_id,
+            "position": data.get("position", 0),
+            "prompt": prompt,
+            "ingredients_used": data.get("ingredient_ids", []),
+            "camera_settings": data.get("camera_settings", {}),
+            "video_url": url,
+            "thumbnail_url": url,
+            "duration_sec": 0,
+            "status": "ready",
+            "job_id": None,
+        }
+        result = get_sb().table("clips").insert(clip).execute()
+        return jsonify({"image_url": url, "clip": result.data[0] if result.data else clip})
+
     return jsonify({"image_url": url})
 
 @app.route("/api/generate/<job_id>/status", methods=["GET"])
