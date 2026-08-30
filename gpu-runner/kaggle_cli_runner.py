@@ -67,11 +67,11 @@ update_clip("generating")
 try:
     from diffusers import WanPipeline
     import imageio, numpy as np
-    pipe = WanPipeline.from_pretrained("Wan-AI/Wan2.1-T2V-14B-FP8", torch_dtype=torch.float16)
+    pipe = WanPipeline.from_pretrained("Wan-AI/Wan2.1-T2V-1.3B", torch_dtype=torch.float16)
     pipe.to("cuda")
     print("Model loaded!")
     out = pipe(prompt=PROMPT, num_frames=NUM_FRAMES, width=WIDTH, height=HEIGHT,
-               num_inference_steps=50, guidance_scale=5.0)
+               num_inference_steps=30, guidance_scale=5.0)
     frames = out.frames[0]
     vf = []
     for f in frames:
