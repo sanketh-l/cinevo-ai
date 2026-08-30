@@ -1,0 +1,530 @@
+# Cinevo — AI Video Generation Platform (Free Version)
+
+**Status**: Planning Phase  
+**Date**: 2026-08-30  
+**Repo**: `cinevo`  
+**Root**: `C:\Users\Sanketh l\cinevo\`  
+**Website Name**: Cinevo
+
+---
+
+## 1. Project Overview
+
+FlowGen AI is a free, cloud-based AI video generation platform replicating Google Flow's core features, backed entirely by free GPU compute platforms (Kaggle, HF ZeroGPU, Colab) and free APIs (Pollinations, edge-tts).
+
+**Target User**: Faceless YouTube content creators  
+**Output**: 8-10 sec 1080p horizontal video clips, stitchable into longer videos  
+**Cost**: $0/month (amortized across free accounts)
+
+---
+
+## 2. Google Flow Features to Clone
+
+| Feature | Google Flow | FlowGen AI Equivalent |
+|---|---|---|
+| Text-to-Video | Describe scene → generate clip | Same (Kaggle/HF/Colab GPU) |
+| Image-to-Video | Upload photo → animate | Same + Pollinations enhancement |
+| Ingredients System | Upload/generate characters, lock consistency | Same + Canny edge extraction |
+| Camera Controls | Pan, tilt, zoom, dolly | Wan 2.1 camera motion params |
+| Scenebuilder | Drag clips into timeline, arrange | Custom timeline UI + FFmpeg |
+| Sceneextend | Fill gaps in generated video | Custom inpaint + extend logic |
+| Asset Library | Browse, search, manage ingredients | Supabase DB + Google Drive storage |
+| Voiceover | Built-in narration | edge-tts (100% free, all languages) |
+| Film Grain/Style | Apply film grain, vintage look | FFmpeg filters |
+| Filmmaker Mode | Vertical / Horizontal / Square | Aspect ratio selector in UI |
+| Project Management | Save, resume, export projects | Supabase DB + Drive storage |
+| Export | 1080p final video | FFmpeg stitch + Google Drive download |
+
+---
+
+## 3. Tech Stack
+
+### Frontend
+- **Framework**: Next.js 14 (App Router)
+- **UI**: Tailwind CSS + Shadcn UI
+- **Timeline**: Custom React drag-and-drop (using `@dnd-kit`)
+- **State**: Zustand (lightweight, easy)
+- **Hosting**: Cloudflare Pages (free tier — unlimited bandwidth, commercial use allowed)
+
+### Backend
+- **API**: FastAPI (Python)
+- **Auth**: Supabase Auth (free tier, email/password)
+- **Database**: Supabase Postgres (free tier, 500MB)
+- **Storage**: Google Drive (15GB free per Google account)
+- **Queue**: GitHub Actions as job queue (unlimited free minutes on public repos)
+
+### GPU Compute (Free)
+| Platform | GPU | VRAM | Daily Quota | Quality |
+|---|---|---|---|---|
+| Kaggle (10 accounts) | T4/P100 | 16GB | 30hrs/week/account | 1080p Wan 2.1 14B |
+| HF ZeroGPU (5 accounts) | RTX Pro 6000 | 48GB | 5min/account/day | 1080p Wan 2.1 14B |
+| Google Colab Free | T4 | 16GB | 12hrs/session | 1080p Wan 2.1 14B |
+
+### Video Models
+| Model | Params | VRAM | Quality | Speed (T4) |
+|---|---|---|---|---|
+| Wan 2.1 14B (FP8) | 14B | 16GB | 83.1% VBench | ~5-8 min |
+| Wan 1.3B | 1.3B | 4GB | ~75% VBench | ~30-45 sec |
+| Stable Video Diffusion | ~1.5B | 8GB | ~72% VBench | ~20-30 sec |
+
+### Other Services
+- **Image Gen**: Pollinations API (free, unlimited)
+- **Voiceover**: edge-tts (free, all languages)
+- **Video Stitch**: FFmpeg (pre-installed on GH Actions)
+
+---
+
+## 4. Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    FLOWGEN AI                           │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ┌──────────────┐     ┌──────────────┐                  │
+│  │   Next.js     │     │   FastAPI     │                  │
+│  │   Frontend    │◄───►│   Backend     │                  │
+│  │  (CF Pages)   │     │  (Railway)    │                  │
+│  └──────────────┘     └──────┬───────┘                  │
+│                               │                          │
+│         ┌────────────────────┼────────────────────┐     │
+│         │                    │                    │     │
+│         ▼                    ▼                    ▼     │
+│  ┌──────────┐        ┌──────────┐        ┌──────────┐  │
+│  │ Supabase  │        │ Google   │        │ GitHub   │  │
+│  │ DB + Auth │        │  Drive   │        │ Actions  │  │
+│  │ (Free)    │        │ (Free)   │        │ (Queue)  │  │
+│  └──────────┘        └──────────┘        └────┬─────┘  │
+│                                                │        │
+│                                    ┌───────────┼──────┐ │
+│                                    │           │      │ │
+│                                    ▼           ▼      ▼ │
+│                              ┌─────────┐ ┌────────┐┌────┐│
+│                              │ Kaggle  │ │   HF   ││C边 ││
+│                              │ 10 acct │ │ 5 acct ││免费 ││
+│                              └─────────┘ └────────┘└────┘│
+│                                    │           │      │ │
+│                                    ▼           ▼      ▼ │
+│                              ┌─────────────────────────┐ │
+│                              │   Wan 2.1 14B (FP8)     │ │
+│                              │   1080p video generation │ │
+│                              └─────────────────────────┘ │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Data Flow
+```
+1. User uploads reference images + enters prompt
+        ↓
+2. Frontend sends to FastAPI backend
+        ↓
+3. Backend checks queue, routes to best available GPU
+        ↓
+4. GitHub Actions workflow triggered
+        ↓
+5. GPU platform downloads model + runs inference
+        ↓
+6. Generated video uploaded to Google Drive
+        ↓
+7. Backend updates Supabase DB with video URL
+        ↓
+8. Frontend polls status, shows preview when ready
+        ↓
+9. User arranges clips in timeline (Scenebuilder)
+        ↓
+10. FFmpeg stitches final video
+        ↓
+11. Final video uploaded to Drive, download link sent
+```
+
+---
+
+## 5. User Workflow (Matching Google Flow)
+
+### 5.1 Account Setup
+1. Sign up with email/password (Supabase Auth)
+2. Connect Google account (OAuth → Drive access)
+3. Dashboard shows: Projects, Ingredients, Generate
+
+### 5.2 Create Project
+1. Click "New Project"
+2. Name it, choose aspect ratio (16:9 horizontal for YouTube)
+3. Enter project workspace
+
+### 5.3 Generate Ingredients (Characters/Assets)
+1. Click "Ingredients" tab
+2. **Option A**: Describe → Pollinations generates character image
+3. **Option B**: Upload your own reference photo
+4. Click "Lock" to save as ingredient (character stays consistent)
+5. **Option C**: Use pre-made styles (anime, realistic, cinematic, etc.)
+
+### 5.4 Generate Video Clip
+1. Click "Generate" tab
+2. **Ingredients section**: Select locked characters/assets
+3. **Prompt section**: Describe the scene in natural language
+4. **Camera controls**: Choose pan/tilt/zoom if needed
+5. **Settings**: Aspect ratio, duration (5-10 sec), style
+6. Click "Generate Video"
+7. Queue position displayed, progress bar shown
+8. Preview video when ready (low-res first, full-res download)
+
+### 5.5 Arrange in Scenebuilder (Timeline)
+1. Click "Timeline" tab
+2. Drag video clips from sidebar into timeline
+3. Rearrange clip order
+4. Trim clip endpoints
+5. Add transitions between clips
+6. Add voiceover to each clip (edge-tts)
+7. Add film grain / style filters
+8. Preview full sequence
+
+### 5.6 Export
+1. Click "Export"
+2. Choose: 1080p, 4K (if model supports)
+3. FFmpeg stitches all clips + voiceover + filters
+4. Final video saved to Google Drive
+5. Download link provided
+6. Option to publish directly to YouTube (future)
+
+---
+
+## 6. Backend API Endpoints
+
+```
+POST   /api/auth/signup          - Create account
+POST   /api/auth/login           - Login
+POST   /api/auth/logout          - Logout
+GET    /api/auth/me              - Get current user
+
+GET    /api/projects             - List user's projects
+POST   /api/projects             - Create new project
+GET    /api/projects/{id}        - Get project details
+PUT    /api/projects/{id}        - Update project
+DELETE /api/projects/{id}        - Delete project
+
+GET    /api/ingredients          - List user's ingredients
+POST   /api/ingredients          - Create ingredient (image)
+POST   /api/ingredients/generate - Generate ingredient via Pollinations
+DELETE /api/ingredients/{id}     - Delete ingredient
+
+POST   /api/generate/video       - Queue video generation
+POST   /api/generate/image       - Generate image (Pollinations)
+GET    /api/generate/{job_id}/status - Check job status
+GET    /api/generate/{job_id}/result - Get generated video URL
+
+POST   /api/generate/voiceover   - Generate voiceover (edge-tts)
+POST   /api/generate/stitch      - Stitch clips together (FFmpeg)
+
+GET    /api/projects/{id}/clips  - Get project clips
+POST   /api/projects/{id}/clips/reorder - Reorder clips in timeline
+PUT    /api/projects/{id}/clips/{clip_id} - Update clip (trim, etc.)
+DELETE /api/projects/{id}/clips/{clip_id} - Remove clip
+
+GET    /api/export/{project_id}/status - Export progress
+POST   /api/export/{project_id}/start  - Start export
+GET    /api/export/{project_id}/download - Download final video
+```
+
+---
+
+## 7. Database Schema (Supabase)
+
+### users
+- id (uuid, PK)
+- email (text)
+- google_drive_token (text, encrypted)
+- created_at (timestamp)
+
+### projects
+- id (uuid, PK)
+- user_id (uuid, FK → users)
+- name (text)
+- aspect_ratio (text, default '16:9')
+- status (text: draft/generating/exporting)
+- created_at (timestamp)
+- updated_at (timestamp)
+
+### ingredients
+- id (uuid, PK)
+- user_id (uuid, FK → users)
+- project_id (uuid, FK → projects, nullable)
+- name (text)
+- type (text: character/scene/style)
+- image_url (text, Google Drive URL)
+- prompt (text)
+- locked (boolean)
+- created_at (timestamp)
+
+### clips
+- id (uuid, PK)
+- project_id (uuid, FK → projects)
+- position (integer)
+- prompt (text)
+- ingredients_used (jsonb)
+- camera_settings (jsonb)
+- video_url (text, Google Drive URL)
+- duration_sec (float)
+- status (text: queued/generating/ready/failed)
+- job_id (text, GPU job ID)
+- created_at (timestamp)
+
+### voiceovers
+- id (uuid, PK)
+- clip_id (uuid, FK → clips)
+- text (text)
+- voice (text)
+- audio_url (text, Google Drive URL)
+- created_at (timestamp)
+
+### exports
+- id (uuid, PK)
+- project_id (uuid, FK → projects)
+- status (text: queued/stitching/done/failed)
+- final_video_url (text, Google Drive URL)
+- created_at (timestamp)
+```
+
+---
+
+## 8. GPU Platform Integration
+
+### 8.1 Kaggle Integration
+- **API**: Kaggle REST API
+- **Auth**: Username + API key per account
+- **10 accounts** for rotation
+- **Workflow**:
+  1. Backend selects least-used Kaggle account
+  2. Triggers notebook via Kaggle API
+  3. Notebook loads Wan 2.1 14B (FP8) from HF
+  4. Runs inference with prompt + optional image
+  5. Uploads video to Google Drive
+  6. Returns result URL to backend
+
+### 8.2 HF ZeroGPU Integration
+- **API**: HuggingFace Spaces API
+- **Auth**: HF token per account
+- **5 accounts** for rotation
+- **Workflow**:
+  1. Backend selects least-used HF account
+  2. Calls HF Space API with prompt + image
+  3. Space runs ZeroGPU inference
+  4. Returns video URL
+
+### 8.3 Google Colab Integration (Manual)
+- **For large projects only**
+- **Workflow**:
+  1. User clicks "Run on Colab" button
+  2. Opens pre-built Colab notebook in browser
+  3. User clicks "Run All"
+  4. Notebook generates all queued videos
+  5. Downloads final videos to user's machine
+
+### 8.4 GitHub Actions Queue
+- **Public repo**: unlimited free minutes
+- **Dispatch workflow** with payload (prompt, image URL, settings)
+- **Matrix strategy**: rotate through accounts
+- **Timeout**: 30 min per job
+- **Retry**: up to 2 retries on failure
+
+---
+
+## 9. Free Resource Management
+
+### Daily Capacity
+| Source | Daily Budget | 1080p Clips (10s each) |
+|---|---|---|
+| 10 Kaggle accounts | ~30 hrs total | ~36-60 clips |
+| 5 HF accounts | ~25 min total | ~5-10 clips |
+| Colab (manual) | ~12 hrs/session | ~14-28 clips |
+| **Total** | **~42+ hrs** | **~55-98 clips** |
+
+### Account Rotation Logic
+```python
+def select_best_platform(job_priority='normal'):
+    accounts = get_available_accounts()
+    
+    # Sort by: priority queue position, account quota remaining, GPU VRAM
+    for account in sorted(accounts, key=lambda a: (
+        a.quota_remaining,
+        a.vram,
+        a.queue_length
+    )):
+        if account.quota_remaining > job_estimated_time:
+            return account
+    
+    # All accounts busy → queue job, notify user
+    return None
+```
+
+---
+
+## 10. Frontend Pages
+
+### Pages
+1. **/login** — Sign up / Login (Supabase Auth)
+2. **/dashboard** — Projects list, create new
+3. **/project/[id]** — Main workspace
+   - Left sidebar: Ingredients panel
+   - Center: Prompt editor + Camera controls
+   - Right sidebar: Generation queue + Results
+   - Bottom: Timeline (Scenebuilder)
+4. **/settings** — Account, connected services
+
+### Key Components
+- **IngredientCard** — Preview image, lock/unlock, delete
+- **PromptEditor** — Text input with autocomplete for ingredients
+- **CameraControls** — Pan/tilt/zoom sliders (Wan 2.1 params)
+- **VideoPreview** — Low-res preview + download full-res
+- **Timeline** — Drag-and-drop clip ordering (dnd-kit)
+- **TimelineClip** — Trim handles, duration display, voiceover indicator
+- **ExportPanel** — Progress bar, download button
+- **QueueStatus** — Real-time job status, position in queue
+
+---
+
+## 11. Deployment
+
+### Frontend (Cloudflare Pages)
+- Connect GitHub repo → auto-deploy
+- Free tier: unlimited bandwidth, 500 builds/month
+
+### Backend (Railway)
+- FastAPI app
+- Free tier: $5 credit/month (enough for small usage)
+- Alternative: Render (free tier)
+
+### Database (Supabase)
+- Free tier: 500MB database, 1GB file storage
+- Auth included
+
+### Storage (Google Drive)
+- 15GB free per Google account
+- Multiple accounts for scaling
+
+### GPU (Free Platforms)
+- Kaggle + HF ZeroGPU + Colab
+- GitHub Actions as job queue
+
+---
+
+## 12. Build Order
+
+### Phase 1: Foundation
+1. Set up Next.js frontend with Tailwind + Shadcn
+2. Set up FastAPI backend
+3. Set up Supabase (auth + database)
+4. Basic project CRUD operations
+
+### Phase 2: Ingredients
+1. Pollinations API integration for image generation
+2. Image upload + Google Drive storage
+3. Ingredients panel UI (grid view, lock/unlock)
+
+### Phase 3: Video Generation
+1. Wan 2.1 14B inference pipeline
+2. Kaggle account integration (10 accounts)
+3. HF ZeroGPU integration (5 accounts)
+4. Job queue + status tracking
+5. Video preview UI
+
+### Phase 4: Scenebuilder
+1. Timeline UI with drag-and-drop
+2. Clip ordering + trimming
+3. Voiceover generation (edge-tts)
+4. FFmpeg stitching pipeline
+5. Export to Google Drive
+
+### Phase 5: Polish
+1. Camera controls UI
+2. Film grain / style filters
+3. Project management
+4. Responsive design
+5. Error handling + retry logic
+
+---
+
+## 13. Cost Summary
+
+| Service | Cost |
+|---|---|
+| Cloudflare Pages (Frontend) | $0/month |
+| Railway (Backend) | $0-5/month |
+| Supabase (DB + Auth) | $0/month |
+| Google Drive (Storage) | $0/month |
+| Kaggle (GPU) | $0/month |
+| HF ZeroGPU (GPU) | $0/month |
+| Colab (GPU, manual) | $0/month |
+| Pollinations (Image Gen) | $0/month |
+| edge-tts (Voiceover) | $0/month |
+| FFmpeg (Stitching) | $0/month |
+| **Total** | **$0-5/month** |
+
+---
+
+## 14. Credentials Required
+
+Before building, I need:
+
+1. **GitHub Account** — For repo + Actions queue
+2. **Google Account(s)** — For Drive storage + Colab
+3. **Kaggle Account(s)** — At least 2 for API rotation (ideally 10)
+4. **HuggingFace Account(s)** — At least 1 (ideally 5)
+5. **Supabase Account** — For database + auth
+6. **Railway Account** — For backend hosting
+7. **Cloudflare Account** — For frontend hosting (Pages)
+
+---
+
+## 15. Files to Create
+
+```
+cinevo/
+├── frontend/                  # Next.js app
+│   ├── app/
+│   │   ├── page.tsx          # Landing page
+│   │   ├── login/page.tsx    # Auth
+│   │   ├── dashboard/page.tsx # Projects list
+│   │   └── project/[id]/page.tsx # Main workspace
+│   ├── components/
+│   │   ├── ui/               # Shadcn components
+│   │   ├── ingredients/      # Ingredient cards, panel
+│   │   ├── prompt/           # Prompt editor
+│   │   ├── timeline/         # Scenebuilder timeline
+│   │   └── video/            # Video preview, player
+│   └── lib/
+│       ├── supabase.ts       # Supabase client
+│       └── api.ts            # Backend API client
+├── backend/                   # FastAPI app
+│   ├── main.py               # FastAPI entry
+│   ├── routers/
+│   │   ├── auth.py
+│   │   ├── projects.py
+│   │   ├── ingredients.py
+│   │   ├── generate.py
+│   │   └── export.py
+│   ├── services/
+│   │   ├── kaggle.py         # Kaggle API integration
+│   │   ├── huggingface.py    # HF ZeroGPU integration
+│   │   ├── pollinations.py   # Image generation
+│   │   ├── edge_tts.py       # Voiceover generation
+│   │   ├── ffmpeg.py         # Video stitching
+│   │   ├── drive.py          # Google Drive storage
+│   │   └── queue.py          # Job queue management
+│   └── models/
+│       └── schemas.py        # Pydantic models
+├── gpu-runner/                # GPU inference code
+│   ├── kaggle-notebook.ipynb  # Kaggle notebook
+│   ├── hf-space/             # HF ZeroGPU Space
+│   │   ├── app.py
+│   │   └── requirements.txt
+│   └── inference.py           # Shared inference code
+├── .github/
+│   └── workflows/
+│       └── gpu-job.yml        # GitHub Actions queue
+├── PLAN.md
+└── README.md
+```
+
+---
+
+**Next Step**: Ask user for credentials, confirm plan, then begin Phase 1 build.
