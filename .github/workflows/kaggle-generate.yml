@@ -3,6 +3,36 @@ name: Kaggle Wan Inference
 on:
   repository_dispatch:
     types: [kaggle_generate_video]
+  workflow_dispatch:
+    inputs:
+      clip_id:
+        required: true
+        type: string
+      job_id:
+        required: true
+        type: string
+      prompt:
+        required: true
+        type: string
+      duration_sec:
+        required: false
+        default: "8"
+        type: string
+      width:
+        required: false
+        default: "832"
+        type: string
+      height:
+        required: false
+        default: "480"
+        type: string
+      num_frames:
+        required: false
+        default: "64"
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   generate:
@@ -25,11 +55,11 @@ jobs:
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          DISPATCH_CLIP_ID: ${{ github.event.client_payload.clip_id }}
-          DISPATCH_JOB_ID: ${{ github.event.client_payload.job_id }}
-          DISPATCH_PROMPT: ${{ github.event.client_payload.prompt }}
-          DISPATCH_DURATION: ${{ github.event.client_payload.duration_sec || "8" }}
-          DISPATCH_WIDTH: ${{ github.event.client_payload.width || "832" }}
-          DISPATCH_HEIGHT: ${{ github.event.client_payload.height || "480" }}
-          DISPATCH_NUM_FRAMES: ${{ github.event.client_payload.num_frames || "64" }}
+          DISPATCH_CLIP_ID: ${{ inputs.clip_id || github.event.client_payload.clip_id }}
+          DISPATCH_JOB_ID: ${{ inputs.job_id || github.event.client_payload.job_id }}
+          DISPATCH_PROMPT: ${{ inputs.prompt || github.event.client_payload.prompt }}
+          DISPATCH_DURATION: ${{ inputs.duration_sec || github.event.client_payload.duration_sec || '8' }}
+          DISPATCH_WIDTH: ${{ inputs.width || github.event.client_payload.width || '832' }}
+          DISPATCH_HEIGHT: ${{ inputs.height || github.event.client_payload.height || '480' }}
+          DISPATCH_NUM_FRAMES: ${{ inputs.num_frames || github.event.client_payload.num_frames || '64' }}
         run: python gpu-runner/kaggle_cli_runner.py
