@@ -42,7 +42,7 @@ def get_clip_status():
 
 def build_notebook():
     code = f'''
-import torch, os, requests
+import torch, os, requests, traceback
 PROMPT = {repr(PROMPT)}
 CLIP_ID = {repr(CLIP_ID)}
 JOB_ID = {repr(JOB_ID)}
@@ -53,9 +53,10 @@ SUPABASE_URL = {repr(SUPABASE_URL)}
 SUPABASE_KEY = {repr(SUPABASE_SERVICE_KEY)}
 HEADERS = {{"apikey": SUPABASE_KEY, "Authorization": f"Bearer {{SUPABASE_KEY}}"}}
 
-def update_clip(status, url=None):
+def update_clip(status, url=None, error=None):
     p = {{"status": status}}
     if url: p["video_url"] = url
+    if error: p["camera_settings"] = {{"error": str(error)[:500]}}
     requests.patch(f"{{SUPABASE_URL}}/rest/v1/clips?id=eq.{{CLIP_ID}}",
         headers={{**HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"}},
         json=p, timeout=30)
@@ -63,13 +64,16 @@ def update_clip(status, url=None):
 print(f"CUDA: {{torch.cuda.is_available()}}")
 if torch.cuda.is_available():
     print(f"GPU: {{torch.cuda.get_device_name(0)}}")
+    print(f"VRAM: {{torch.cuda.get_device_properties(0).total_mem / 1e9:.1f}}GB")
 update_clip("generating")
 try:
     from diffusers import WanPipeline
     import imageio, numpy as np
+    print("Loading Wan2.1-T2V-1.3B model...")
     pipe = WanPipeline.from_pretrained("Wan-AI/Wan2.1-T2V-1.3B", torch_dtype=torch.float16)
     pipe.to("cuda")
     print("Model loaded!")
+    print(f"Generating {{NUM_FRAMES}} frames at {{WIDTH}}x{{HEIGHT}}...")
     out = pipe(prompt=PROMPT, num_frames=NUM_FRAMES, width=WIDTH, height=HEIGHT,
                num_inference_steps=30, guidance_scale=5.0)
     frames = out.frames[0]
@@ -81,6 +85,7 @@ try:
     pth = "/kaggle/working/output.mp4"
     imageio.mimsave(pth, vf, fps=16)
     with open(pth,"rb") as fh: data = fh.read()
+    print(f"Uploading {{len(data)}} bytes to Supabase...")
     requests.post(f"{{SUPABASE_URL}}/storage/v1/object/videos/{{JOB_ID}}/video.mp4",
         headers={{**HEADERS, "Content-Type": "video/mp4", "x-upsert": "true"}},
         data=data, timeout=120)
@@ -88,8 +93,10 @@ try:
     update_clip("ready", url)
     print(f"DONE: {{url}}")
 except Exception as e:
+    tb = traceback.format_exc()
     print(f"FAILED: {{e}}")
-    update_clip("failed")
+    print(f"TRACEBACK: {{tb}}")
+    update_clip("failed", error=tb[-500:])
 '''
     return {
         "cells": [
