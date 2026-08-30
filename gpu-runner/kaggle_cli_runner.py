@@ -101,18 +101,19 @@ try:
     else:
         print("No GPU available - generating stylized fallback video")
         vf = []
+        ys = np.arange(HEIGHT).reshape(-1, 1)
+        xs = np.arange(WIDTH).reshape(1, -1)
+        dx = (xs - WIDTH / 2) / WIDTH
+        dy = (ys - HEIGHT / 2) / HEIGHT
         for i in range(NUM_FRAMES):
             t = i / max(NUM_FRAMES - 1, 1)
             r = int(20 + 60 * t)
             g = int(40 + 80 * (1 - t))
             b = int(100 + 100 * t)
-            frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
-            cy, cx = HEIGHT // 2, WIDTH // 2
-            for y in range(0, HEIGHT, 4):
-                for x in range(0, WIDTH, 4):
-                    dx, dy = (x - cx) / WIDTH, (y - cy) / HEIGHT
-                    v = int(128 + 127 * np.sin(dx * 10 + t * 6.28 + dy * 8))
-                    frame[y:y+4, x:x+4] = [min(255, max(0, r + v // 3)), min(255, max(0, g + v // 4)), min(255, max(0, b + v // 5))]
+            v = (128 + 127 * np.sin(dx * 10 + t * 6.28 + dy * 8)).astype(np.uint8)
+            frame = np.stack([np.clip(r + v // 3, 0, 255).astype(np.uint8)] * 3, axis=-1)
+            frame[:,:,1] = np.clip(g + v // 4, 0, 255).astype(np.uint8)
+            frame[:,:,2] = np.clip(b + v // 5, 0, 255).astype(np.uint8)
             vf.append(frame)
         print(f"Generated {{len(vf)}} fallback frames")
 
