@@ -42,7 +42,7 @@ def get_clip_status():
 
 def build_notebook():
     code = f'''
-import torch, os, requests, traceback
+import torch, os, requests, traceback, json
 PROMPT = {repr(PROMPT)}
 CLIP_ID = {repr(CLIP_ID)}
 JOB_ID = {repr(JOB_ID)}
@@ -53,20 +53,27 @@ SUPABASE_URL = {repr(SUPABASE_URL)}
 SUPABASE_KEY = {repr(SUPABASE_SERVICE_KEY)}
 HEADERS = {{"apikey": SUPABASE_KEY, "Authorization": f"Bearer {{SUPABASE_KEY}}"}}
 
+def safe_patch(data):
+    try:
+        requests.patch(f"{{SUPABASE_URL}}/rest/v1/clips?id=eq.{{CLIP_ID}}",
+            headers={{**HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"}},
+            json=data, timeout=30)
+    except:
+        pass
+
 def update_clip(status, url=None, error=None):
     p = {{"status": status}}
     if url: p["video_url"] = url
     if error: p["camera_settings"] = {{"error": str(error)[:500]}}
-    requests.patch(f"{{SUPABASE_URL}}/rest/v1/clips?id=eq.{{CLIP_ID}}",
-        headers={{**HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"}},
-        json=p, timeout=30)
+    safe_patch(p)
 
-print(f"CUDA: {{torch.cuda.is_available()}}")
-if torch.cuda.is_available():
-    print(f"GPU: {{torch.cuda.get_device_name(0)}}")
-    print(f"VRAM: {{torch.cuda.get_device_properties(0).total_mem / 1e9:.1f}}GB")
-update_clip("generating")
+# Always try to report errors even if main logic crashes
 try:
+    print(f"CUDA: {{torch.cuda.is_available()}}")
+    if torch.cuda.is_available():
+        print(f"GPU: {{torch.cuda.get_device_name(0)}}")
+        print(f"VRAM: {{torch.cuda.get_device_properties(0).total_mem / 1e9:.1f}}GB")
+    update_clip("generating")
     from diffusers import WanPipeline
     import imageio, numpy as np
     print("Loading Wan2.1-T2V-1.3B model...")
@@ -92,10 +99,17 @@ try:
     url = f"{{SUPABASE_URL}}/storage/v1/object/public/videos/{{JOB_ID}}/video.mp4"
     update_clip("ready", url)
     print(f"DONE: {{url}}")
-except Exception as e:
+except BaseException as e:
     tb = traceback.format_exc()
     print(f"FAILED: {{e}}")
     print(f"TRACEBACK: {{tb}}")
+    # Upload full traceback as file
+    try:
+        requests.post(f"{{SUPABASE_URL}}/storage/v1/object/audio/{{JOB_ID}}_error.txt",
+            headers={{**HEADERS, "Content-Type": "text/plain", "x-upsert": "true"}},
+            data=tb.encode()[:2000], timeout=30)
+    except:
+        pass
     update_clip("failed", error=tb[-500:])
 '''
     return {
