@@ -3,9 +3,9 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
-  projectsApi, ingredientsApi, clipsApi, collectionsApi, generateApi, exportApi, accountsApi,
+  projectsApi, ingredientsApi, clipsApi, collectionsApi, generateApi, exportApi, accountsApi, voiceoversApi,
   type Project, type Ingredient, type Clip, type Collection,
-  type AccountStatus,
+  type AccountStatus, type Voiceover,
 } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import {
   ArrowLeft, Plus, Film, Lock, Unlock, Trash2, Play, Loader2, Download,
   Image as ImageIcon, Video, GripVertical, Camera, Search, X, Check,
-  Sparkles, Clock, Menu, PanelRightClose, UploadCloud, Server,
+  Sparkles, Clock, Menu, PanelRightClose, UploadCloud, Server, Volume2,
 } from "lucide-react";
 
 const STYLE_PRESETS = ["Cinematic", "Film Noir", "Anime", "Realistic", "Dreamy"];
@@ -63,6 +63,11 @@ export default function ProjectPage() {
   const [accountStatus, setAccountStatus] = useState<AccountStatus | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportUrl, setExportUrl] = useState<string | null>(null);
+  const [voText, setVoText] = useState("");
+  const [voVoice, setVoVoice] = useState("en-US-AriaNeural");
+  const [voGenerating, setVoGenerating] = useState(false);
+  const [clipVoiceovers, setClipVoiceovers] = useState<Voiceover[]>([]);
+  const [voices, setVoices] = useState<{ id: string; name: string; language: string }[]>([]);
 
   // Load Data
   const loadData = useCallback(async () => {
@@ -89,6 +94,33 @@ export default function ProjectPage() {
   }, [projectId]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    generateApi.voices().then((res) => setVoices(res.data)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (previewClip) {
+      voiceoversApi.list(previewClip.id).then((res) => setClipVoiceovers(res.data)).catch(() => setClipVoiceovers([]));
+    } else {
+      setClipVoiceovers([]);
+    }
+  }, [previewClip]);
+
+  const handleGenerateVoiceover = async () => {
+    if (!voText.trim() || !previewClip) return;
+    setVoGenerating(true);
+    try {
+      await generateApi.voiceover({ text: voText, voice: voVoice, clip_id: previewClip.id });
+      const res = await voiceoversApi.list(previewClip.id);
+      setClipVoiceovers(res.data);
+      setVoText("");
+    } catch (err) {
+      console.error("Voiceover failed:", err);
+    } finally {
+      setVoGenerating(false);
+    }
+  };
 
   // Polling
   useEffect(() => {
@@ -588,6 +620,33 @@ export default function ProjectPage() {
                   </div>
                 )}
                 <p className="text-white/30 text-[10px] sm:text-xs text-center mt-2 max-w-md truncate">{previewClip.prompt}</p>
+                {previewClip.status === "ready" && (
+                  <div className="w-full max-w-md mt-3 border border-white/5 rounded-xl p-2.5 bg-white/[0.02]">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Volume2 className="w-3.5 h-3.5 text-white/30" />
+                      <span className="text-[10px] text-white/30 font-medium">Voiceover</span>
+                    </div>
+                    {clipVoiceovers.length > 0 && (
+                      <div className="space-y-1.5 mb-2">
+                        {clipVoiceovers.map((vo) => (
+                          <div key={vo.id} className="flex items-center gap-2 bg-white/5 rounded-lg px-2 py-1">
+                            <audio controls src={vo.audio_url || undefined} className="h-6 flex-1" />
+                            <span className="text-[9px] text-white/20 truncate max-w-[80px]">{vo.voice.split("-")[2]}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex gap-1.5">
+                      <select value={voVoice} onChange={(e) => setVoVoice(e.target.value)} className="bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] text-white/60 flex-shrink-0 w-28">
+                        {voices.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                      </select>
+                      <input value={voText} onChange={(e) => setVoText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleGenerateVoiceover()} placeholder="Narration text..." className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] text-white placeholder:text-white/20" />
+                      <Button size="sm" onClick={handleGenerateVoiceover} disabled={voGenerating || !voText.trim()} className="h-7 px-2.5 bg-white/10 hover:bg-white/15 text-white rounded-lg text-[10px]">
+                        {voGenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Volume2 className="w-3 h-3" />}
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="flex flex-col items-center gap-3 text-center px-4">

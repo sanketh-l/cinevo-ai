@@ -56,6 +56,15 @@ export interface Voice {
   language: string;
 }
 
+export interface Voiceover {
+  id: string;
+  clip_id: string;
+  text: string;
+  voice: string;
+  audio_url: string | null;
+  created_at: string;
+}
+
 export interface AccountStatus {
   supabase: { connected: boolean };
   github_actions: { connected: boolean; workflow: string };
@@ -120,7 +129,11 @@ export const generateApi = {
   status: (jobId: string) => api.get<{ status: string; video_url: string | null; clip_id: string }>(`/api/generate/${jobId}/status`),
   voices: () => api.get<Voice[]>("/api/generate/voices"),
   voiceover: (data: { text: string; voice?: string; clip_id?: string }) =>
-    api.post<{ voiceover_id: string; status: string }>("/api/generate/voiceover", data),
+    api.post<{ voiceover_id: string; audio_url: string; status: string }>("/api/generate/voiceover", data),
+};
+
+export const voiceoversApi = {
+  list: (clipId: string) => api.get<Voiceover[]>(`/api/clips/${clipId}/voiceovers`),
 };
 
 export const exportApi = {

@@ -117,3 +117,11 @@ on conflict (id) do update set public = true;
 insert into storage.buckets (id, name, public)
 values ('images', 'images', true)
 on conflict (id) do update set public = true;
+
+insert into storage.buckets (id, name, public)
+values ('audio', 'audio', true)
+on conflict (id) do update set public = true;
+
+insert into storage.buckets (id, name, public)
+values ('audio', 'audio', true)
+on conflict (id) do update set public = true;

@@ -40,6 +40,17 @@ def fetch_clips():
     return [clip for clip in response.json() if clip.get("video_url")]
 
 
+def fetch_voiceover(clip_id):
+    response = requests.get(
+        f"{SUPABASE_URL}/rest/v1/voiceovers?clip_id=eq.{clip_id}&order=created_at.desc&limit=1",
+        headers=HEADERS,
+        timeout=30,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data[0] if data and data[0].get("audio_url") else None
+
+
 def download(url, path):
     response = requests.get(url, timeout=120)
     response.raise_for_status()
@@ -59,6 +70,20 @@ def upload(path):
     return f"{SUPABASE_URL}/storage/v1/object/public/videos/{name}"
 
 
+def normalize_clip(raw_path, norm_path, audio_path=None):
+    cmd = [
+        "ffmpeg", "-y", "-i", raw_path,
+        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+        "-r", "24", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+    ]
+    if audio_path and os.path.exists(audio_path):
+        cmd += ["-i", audio_path, "-c:a", "aac", "-b:a", "128k", "-shortest"]
+    else:
+        cmd += ["-an"]
+    cmd.append(norm_path)
+    subprocess.run(cmd, check=True)
+
+
 def main():
     patch_export("stitching")
     clips = fetch_clips()
@@ -70,11 +95,14 @@ def main():
         raw = f"raw_{index}.mp4"
         norm = f"clip_{index}.mp4"
         download(clip["video_url"], raw)
-        subprocess.run([
-            "ffmpeg", "-y", "-i", raw,
-            "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
-            "-r", "24", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-an", norm,
-        ], check=True)
+
+        vo = fetch_voiceover(clip["id"])
+        audio_path = None
+        if vo and vo.get("audio_url"):
+            audio_path = f"vo_{index}.mp3"
+            download(vo["audio_url"], audio_path)
+
+        normalize_clip(raw, norm, audio_path)
         normalized.append(norm)
 
     Path("concat.txt").write_text("".join(f"file '{Path(path).resolve()}'\n" for path in normalized))

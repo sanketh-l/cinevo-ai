@@ -59,15 +59,17 @@ def health():
 
 @app.route("/api/accounts/status")
 def account_status():
+    kaggle_accounts = len([k for k in ("KAGGLE_ACCOUNT_1_KEY", "KAGGLE_ACCOUNT_2_KEY") if os.environ.get(k)])
     return jsonify({
         "supabase": {"connected": bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_KEY"))},
         "github_actions": {"connected": bool(os.environ.get("GITHUB_TOKEN")), "workflow": "generate-video.yml"},
         "kaggle": {
-            "connected_accounts": len([k for k in ("KAGGLE_ACCOUNT_1_KEY", "KAGGLE_ACCOUNT_2_KEY") if os.environ.get(k)]),
-            "mode": "pending_real_wan_inference",
+            "connected_accounts": kaggle_accounts,
+            "available": kaggle.available,
+            "mode": "wan_2_1_14b_real_inference" if kaggle.available else "pending_credentials",
         },
         "huggingface": {"connected": bool(os.environ.get("HF_TOKEN")), "mode": "pending_zerogpu_space"},
-        "storage": {"video_bucket": "videos", "image_bucket": "images"},
+        "storage": {"video_bucket": "videos", "image_bucket": "images", "audio_bucket": "audio"},
     })
 
 # ── Projects ────────────────────────────────────────────
@@ -238,12 +240,39 @@ def generate_video():
         refs = get_sb().table("ingredients").select("id,image_url,name").in_("id", ingredient_ids[:3]).execute()
         reference_images = refs.data or []
 
-    try:
-        trigger_github_action(data, job_id, clip_id, reference_images)
-    except Exception:
-        pass
+    # Try Kaggle first (real Wan 2.1), fall back to GitHub Actions (FFmpeg fallback)
+    runner_used = "github_actions"
+    if kaggle.available:
+        try:
+            ref_url = reference_images[0]["image_url"] if reference_images else None
+            # Resolve resolution from aspect ratio
+            ar = data.get("aspect_ratio", "16:9")
+            if ar == "9:16":
+                w, h = 480, 832
+            elif ar == "1:1":
+                w, h = 640, 640
+            else:
+                w, h = 832, 480
+            num_frames = max(1, int(data.get("duration_sec", 8) * 16))
+            kaggle.push_and_run(
+                prompt=data.get("prompt", ""),
+                clip_id=clip_id,
+                job_id=job_id,
+                reference_image_url=ref_url,
+                width=w, height=h, num_frames=num_frames,
+            )
+            runner_used = "kaggle"
+        except Exception as e:
+            print(f"[kaggle] Failed, falling back to GH Actions: {e}")
+            runner_used = "github_actions_fallback"
 
-    return jsonify({"job_id": job_id, "clip_id": clip_id, "status": "queued"})
+    if runner_used != "kaggle":
+        try:
+            trigger_github_action(data, job_id, clip_id, reference_images)
+        except Exception:
+            pass
+
+    return jsonify({"job_id": job_id, "clip_id": clip_id, "status": "queued", "runner": runner_used})
 
 @app.route("/api/generate/image", methods=["POST"])
 def generate_image():
@@ -321,33 +350,48 @@ def generate_voiceover():
     voice = data.get("voice", "en-US-AriaNeural")
     clip_id = data.get("clip_id")
 
+    if not text.strip():
+        return jsonify({"error": "text is required"}), 400
+    if not clip_id:
+        return jsonify({"error": "clip_id is required"}), 400
+
     try:
-        import edge_tts
-        import asyncio
+        from gtts import gTTS
         import tempfile
 
         output_path = os.path.join(tempfile.gettempdir(), f"vo_{uuid.uuid4().hex[:8]}.mp3")
 
-        async def _gen():
-            communicate = edge_tts.Communicate(text, voice)
-            await communicate.save(output_path)
+        # Map voice selection to gTTS language codes
+        lang_map = {
+            "en-US-AriaNeural": "en", "en-US-GuyNeural": "en", "en-US-JennyNeural": "en",
+            "en-GB-SoniaNeural": "en-gb", "en-GB-RyanNeural": "en-gb",
+            "en-IN-NeerjaNeural": "en", "en-IN-PrabhatNeural": "en",
+            "ja-JP-NanamiNeural": "ja", "ko-KR-SunHiNeural": "ko",
+            "zh-CN-XiaoxiaoNeural": "zh-cn", "es-ES-ElviraNeural": "es",
+            "fr-FR-DeniseNeural": "fr", "de-DE-KatjaNeural": "de",
+            "pt-BR-FranciscaNeural": "pt-br", "ar-SA-ZariyahNeural": "ar",
+        }
+        lang = lang_map.get(voice, "en")
+        tts = gTTS(text=text, lang=lang)
+        tts.save(output_path)
 
-        asyncio.run(_gen())
+        with open(output_path, "rb") as audio_file:
+            audio_url = storage_upload("audio", f"voiceovers/{clip_id}/{uuid.uuid4().hex}.mp3", audio_file.read(), "audio/mpeg")
 
         vo_id = str(uuid.uuid4())
         vo = {
             "id": vo_id,
-            "clip_id": clip_id or "",
+            "clip_id": clip_id,
             "text": text,
             "voice": voice,
-            "audio_url": "",
+            "audio_url": audio_url,
         }
         get_sb().table("voiceovers").insert(vo).execute()
 
         if os.path.exists(output_path):
             os.remove(output_path)
 
-        return jsonify({"voiceover_id": vo_id, "status": "generated"})
+        return jsonify({"voiceover_id": vo_id, "audio_url": audio_url, "status": "generated"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -372,6 +416,11 @@ def list_voices():
     ]
     return jsonify(voices)
 
+@app.route("/api/clips/<clip_id>/voiceovers", methods=["GET"])
+def list_clip_voiceovers(clip_id):
+    result = get_sb().table("voiceovers").select("*").eq("clip_id", clip_id).order("created_at", desc=True).execute()
+    return jsonify(result.data)
+
 # ── Export ──────────────────────────────────────────────
 @app.route("/api/export/<project_id>/start", methods=["POST"])
 def start_export(project_id):
@@ -390,6 +439,146 @@ def export_status(project_id):
     if not result.data:
         return jsonify({"status": "none"})
     return jsonify(result.data[0])
+
+# ── Kaggle Service ─────────────────────────────────────
+class KaggleRunner:
+    def __init__(self):
+        self.username = os.environ.get("KAGGLE_ACCOUNT_1_USERNAME", "")
+        self.key = os.environ.get("KAGGLE_ACCOUNT_1_KEY", "")
+        self.username2 = os.environ.get("KAGGLE_ACCOUNT_2_USERNAME", "")
+        self.key2 = os.environ.get("KAGGLE_ACCOUNT_2_KEY", "")
+
+    @property
+    def available(self):
+        return bool(self.username and self.key)
+
+    def _auth(self, which=1):
+        if which == 2 and self.username2 and self.key2:
+            return (self.username2, self.key2)
+        return (self.username, self.key)
+
+    def push_and_run(self, prompt, clip_id, job_id, reference_image_url=None,
+                     width=832, height=480, num_frames=81):
+        """Push a Wan inference notebook to Kaggle and start it."""
+        notebook_source = self._build_notebook(prompt, clip_id, job_id,
+                                                reference_image_url, width, height, num_frames)
+        kernel_slug = f"{self.username}/cinevo-{job_id}"
+
+        payload = {
+            "id": kernel_slug,
+            "source": {
+                "type": "notebook",
+                "language": "python",
+                "source": notebook_source,
+            },
+            "metadata": {
+                "enableGpu": True,
+                "enableInternet": True,
+            },
+        }
+        resp = httpx.put(
+            "https://www.kaggle.com/api/v1/kernels/push",
+            json=payload,
+            auth=self._auth(),
+            timeout=30,
+        )
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"Kaggle push: {resp.status_code} {resp.text[:200]}")
+
+        run_resp = httpx.post(
+            "https://www.kaggle.com/api/v1/kernels/runs",
+            json={"kernelSlug": kernel_slug},
+            auth=self._auth(),
+            timeout=30,
+        )
+        if run_resp.status_code not in (200, 201, 204):
+            raise RuntimeError(f"Kaggle run: {run_resp.status_code} {run_resp.text[:200]}")
+
+        return {"kernel_slug": kernel_slug, "status": "triggered"}
+
+    def check_status(self, kernel_slug):
+        resp = httpx.get(
+            f"https://www.kaggle.com/api/v1/kernels/status/{kernel_slug}",
+            auth=self._auth(),
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        return {"status": "unknown"}
+
+    def _build_notebook(self, prompt, clip_id, job_id, ref_image_url, width, height, num_frames):
+        sb_url = os.environ["SUPABASE_URL"].rstrip("/")
+        sb_key = os.environ["SUPABASE_SERVICE_KEY"]
+        code = f'''
+import torch, os, json, requests
+PROMPT = {repr(prompt)}
+CLIP_ID = {repr(clip_id)}
+JOB_ID = {repr(job_id)}
+REF_IMAGE = {repr(ref_image_url or "")}
+WIDTH = {width}
+HEIGHT = {height}
+NUM_FRAMES = {num_frames}
+SUPABASE_URL = {repr(sb_url)}
+SUPABASE_KEY = {repr(sb_key)}
+HEADERS = {{"apikey": SUPABASE_KEY, "Authorization": f"Bearer {{SUPABASE_KEY}}"}}
+
+def update_clip(status, url=None):
+    p = {{"status": status}}
+    if url: p["video_url"] = url
+    requests.patch(f"{{SUPABASE_URL}}/rest/v1/clips?id=eq.{{CLIP_ID}}",
+        headers={{**HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"}},
+        json=p, timeout=30)
+
+print(f"CUDA: {{torch.cuda.is_available()}}")
+update_clip("generating")
+try:
+    from diffusers import WanPipeline
+    from diffusers.utils import export_to_video
+    import imageio, numpy as np
+    pipe = WanPipeline.from_pretrained("Wan-AI/Wan2.1-T2V-14B-FP8", torch_dtype=torch.float16)
+    pipe.to("cuda")
+    print("Model loaded!")
+    out = pipe(prompt=PROMPT, num_frames=NUM_FRAMES, width=WIDTH, height=HEIGHT,
+               num_inference_steps=50, guidance_scale=5.0)
+    frames = out.frames[0]
+    vf = []
+    for f in frames:
+        a = f.cpu().numpy() if isinstance(f, torch.Tensor) else f
+        if a.ndim == 3 and a.shape[0] in [1,3]: a = np.transpose(a,(1,2,0))
+        vf.append((a*255).astype(np.uint8))
+    pth = "/kaggle/working/output.mp4"
+    imageio.mimsave(pth, vf, fps=16)
+    with open(pth,"rb") as fh: data = fh.read()
+    requests.post(f"{{SUPABASE_URL}}/storage/v1/object/videos/{{JOB_ID}}/video.mp4",
+        headers={{**HEADERS, "Content-Type": "video/mp4", "x-upsert": "true"}},
+        data=data, timeout=120)
+    url = f"{{SUPABASE_URL}}/storage/v1/object/public/videos/{{JOB_ID}}/video.mp4"
+    update_clip("ready", url)
+    print(f"DONE: {{url}}")
+except Exception as e:
+    print(f"FAILED: {{e}}")
+    update_clip("failed")
+'''
+        notebook = {
+            "cells": [
+                {"cell_type": "markdown", "metadata": {}, "source": ["# Cinevo Wan 2.1 Inference"]},
+                {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                 "source": ["!pip install -q diffusers transformers accelerate safetensors imageio imageio-ffmpeg torch torchvision"]},
+                {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                 "source": [code]},
+            ],
+            "metadata": {
+                "kaggle": {"accelerator": "GPU", "dataSources": [], "isGpuEnabled": True, "isInternetEnabled": True, "language": "python"},
+                "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+                "language_info": {"name": "python", "version": "3.10.0"},
+            },
+            "nbformat": 4,
+            "nbformat_minor": 4,
+        }
+        return json.dumps(notebook)
+
+
+kaggle = KaggleRunner()
 
 # ── GitHub Actions Trigger ──────────────────────────────
 def trigger_github_action(data, job_id, clip_id, reference_images=None):
