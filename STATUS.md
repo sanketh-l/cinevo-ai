@@ -18,6 +18,9 @@
 - Upload generated MP4 to Supabase Storage
 - Update clip status to `ready` with public MP4 URL
 - Account status endpoint for Supabase, GitHub Actions, Kaggle, HF, and storage
+- Export job dispatch through GitHub Actions
+- FFmpeg stitching of ready clips into a final MP4
+- Final export MP4 upload to Supabase Storage
 
 ## Not Real Yet
 
@@ -25,7 +28,7 @@
 - Kaggle account keys are configured, but Kaggle notebook execution is not wired into the live job path.
 - HuggingFace token is configured, but no ZeroGPU Space is deployed/called yet.
 - Google Drive storage is not wired; Supabase Storage is currently used.
-- Export currently creates an export record only; full FFmpeg stitching export is still pending.
+- Export stitches ready MP4 clips only; voiceover/audio mixing is still pending.
 - Browser automation via Playwright MCP times out on this machine, so UI click verification is manual/API-level only.
 
 ## Current Video Behavior

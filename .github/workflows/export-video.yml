@@ -1,0 +1,39 @@
+name: Export Video
+
+on:
+  repository_dispatch:
+    types: [export_video]
+  workflow_dispatch:
+    inputs:
+      project_id:
+        required: true
+        type: string
+      export_id:
+        required: true
+        type: string
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Stitch clips and update Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DISPATCH_PROJECT_ID: ${{ github.event.client_payload.project_id || inputs.project_id }}
+          DISPATCH_EXPORT_ID: ${{ github.event.client_payload.export_id || inputs.export_id }}
+        run: python gpu-runner/export_video.py

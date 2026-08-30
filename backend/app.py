@@ -378,6 +378,10 @@ def start_export(project_id):
     export_id = str(uuid.uuid4())
     export = {"id": export_id, "project_id": project_id, "status": "queued"}
     get_sb().table("exports").insert(export).execute()
+    try:
+        trigger_export_action(project_id, export_id)
+    except Exception:
+        pass
     return jsonify({"export_id": export_id, "status": "queued"})
 
 @app.route("/api/export/<project_id>/status", methods=["GET"])
@@ -408,6 +412,28 @@ def trigger_github_action(data, job_id, clip_id, reference_images=None):
             "duration_sec": data.get("duration_sec", 8),
             "aspect_ratio": data.get("aspect_ratio", "16:9"),
         },
+    }
+    try:
+        httpx.post(
+            "https://api.github.com/repos/sanketh-l/cinevo-ai/dispatches",
+            headers=headers,
+            json=payload,
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+def trigger_export_action(project_id, export_id):
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        return
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    payload = {
+        "event_type": "export_video",
+        "client_payload": {"project_id": project_id, "export_id": export_id},
     }
     try:
         httpx.post(
