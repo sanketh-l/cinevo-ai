@@ -27,6 +27,7 @@ interface AppState {
   setCollections: (c: Collection[]) => void;
   addCollection: (c: Collection) => void;
   toggleIngredient: (id: string) => void;
+  setSelectedIngredients: (ids: string[]) => void;
   setPrompt: (p: string) => void;
   setGenerating: (g: boolean) => void;
   setGeneratingImage: (g: boolean) => void;
@@ -68,6 +69,7 @@ export const useAppStore = create<AppState>((set) => ({
         ? [...s.selectedIngredients, id]
         : s.selectedIngredients,
     })),
+  setSelectedIngredients: (selectedIngredients) => set({ selectedIngredients }),
   setPrompt: (prompt) => set({ prompt }),
   setGenerating: (generating) => set({ generating }),
   setGeneratingImage: (generatingImage) => set({ generatingImage }),

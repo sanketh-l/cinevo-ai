@@ -35,7 +35,7 @@ export default function ProjectPage() {
     setIngredients, addIngredient, removeIngredient,
     setClips, addClip, updateClip, removeClip,
     setCollections, addCollection,
-    toggleIngredient, setPrompt, setGenerating, setGeneratingImage,
+    toggleIngredient, setSelectedIngredients, setPrompt, setGenerating, setGeneratingImage,
     setPreviewClip, setActiveTab, setSidebarTab, setCurrentProject,
   } = store;
 
@@ -375,7 +375,7 @@ export default function ProjectPage() {
                             {ing.locked ? <Lock className="w-2.5 h-2.5 text-white" /> : <Unlock className="w-2.5 h-2.5 text-white/50" />}
                           </button>
                           <button
-                            onClick={(e) => { e.stopPropagation(); handleDeleteIngredient(ing.id); }}
+                            onClick={(e) => { e.stopPropagation(); ingredientsApi.delete(ing.id).then(() => removeIngredient(ing.id)).catch(console.error); }}
                             className="w-5 h-5 bg-black/70 rounded-md flex items-center justify-center"
                           >
                             <Trash2 className="w-2.5 h-2.5 text-white/50" />
@@ -786,6 +786,4 @@ export default function ProjectPage() {
   );
 }
 
-function handleDeleteIngredient(id: string) {
-  ingredientsApi.delete(id).catch(console.error);
-}
+
