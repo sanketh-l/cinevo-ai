@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Cinevo - AI Video Generation",
-  description: "Free AI video generation platform powered by Wan 2.1",
+  description: "Free AI video generation platform",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

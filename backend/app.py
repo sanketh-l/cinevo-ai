@@ -2,7 +2,8 @@ import os
 import uuid
 import json
 import time
-from flask import Flask, request, jsonify, send_file
+import urllib.parse
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from supabase import create_client
 import httpx
@@ -18,9 +19,6 @@ def get_sb():
         _sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
     return _sb
 
-def noauth_user_id():
-    return "anonymous"
-
 def get_user_id():
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
@@ -28,9 +26,9 @@ def get_user_id():
             user = get_sb().auth.get_user(auth.replace("Bearer ", ""))
             if user and user.user:
                 return user.user.id
-        except:
+        except Exception:
             pass
-    return noauth_user_id()
+    return "anonymous"
 
 # ── Health ──────────────────────────────────────────────
 @app.route("/api/health")
@@ -47,20 +45,19 @@ def list_projects():
 @app.route("/api/projects", methods=["POST"])
 def create_project():
     uid = get_user_id()
-    data = request.json
+    data = request.json or {}
     project = {
         "id": str(uuid.uuid4()),
         "user_id": uid,
-        "name": data.get("name", "Untitled Project"),
+        "name": data.get("name", "Untitled Project")[:100],
         "aspect_ratio": data.get("aspect_ratio", "16:9"),
         "status": "draft",
     }
     result = get_sb().table("projects").insert(project).execute()
-    return jsonify(result.data[0])
+    return jsonify(result.data[0] if result.data else project)
 
 @app.route("/api/projects/<project_id>", methods=["GET"])
 def get_project(project_id):
-    uid = get_user_id()
     result = get_sb().table("projects").select("*").eq("id", project_id).execute()
     if not result.data:
         return jsonify({"error": "Not found"}), 404
@@ -68,7 +65,7 @@ def get_project(project_id):
 
 @app.route("/api/projects/<project_id>", methods=["PUT"])
 def update_project(project_id):
-    data = request.json
+    data = request.json or {}
     allowed = {k: v for k, v in data.items() if k in ("name", "aspect_ratio", "status")}
     if allowed:
         get_sb().table("projects").update(allowed).eq("id", project_id).execute()
@@ -76,6 +73,8 @@ def update_project(project_id):
 
 @app.route("/api/projects/<project_id>", methods=["DELETE"])
 def delete_project(project_id):
+    get_sb().table("clips").delete().eq("project_id", project_id).execute()
+    get_sb().table("ingredients").delete().eq("project_id", project_id).execute()
     get_sb().table("projects").delete().eq("id", project_id).execute()
     return jsonify({"status": "deleted"})
 
@@ -93,11 +92,11 @@ def list_ingredients():
 @app.route("/api/ingredients", methods=["POST"])
 def create_ingredient():
     uid = get_user_id()
-    data = request.json
+    data = request.json or {}
     ingredient = {
         "id": str(uuid.uuid4()),
         "user_id": uid,
-        "name": data.get("name", "Untitled"),
+        "name": data.get("name", "Untitled")[:100],
         "type": data.get("type", "character"),
         "image_url": data.get("image_url", ""),
         "prompt": data.get("prompt", ""),
@@ -106,11 +105,11 @@ def create_ingredient():
         "collection_id": data.get("collection_id"),
     }
     result = get_sb().table("ingredients").insert(ingredient).execute()
-    return jsonify(result.data[0])
+    return jsonify(result.data[0] if result.data else ingredient)
 
 @app.route("/api/ingredients/<ingredient_id>", methods=["PUT"])
 def update_ingredient(ingredient_id):
-    data = request.json
+    data = request.json or {}
     allowed = {k: v for k, v in data.items() if k in ("name", "type", "locked", "collection_id")}
     if allowed:
         get_sb().table("ingredients").update(allowed).eq("id", ingredient_id).execute()
@@ -123,12 +122,13 @@ def delete_ingredient(ingredient_id):
 
 @app.route("/api/ingredients/generate", methods=["POST"])
 def generate_ingredient():
-    data = request.json
+    data = request.json or {}
     prompt = data.get("prompt", "")
     w = data.get("width", 1024)
     h = data.get("height", 1024)
     seed = data.get("seed", int(time.time()))
-    url = f"https://image.pollinations.ai/prompt/{prompt}?width={w}&height={h}&model=flux&nologo=true&seed={seed}"
+    encoded_prompt = urllib.parse.quote(prompt)
+    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={w}&height={h}&model=flux&nologo=true&seed={seed}"
     return jsonify({"image_url": url, "prompt": prompt})
 
 # ── Collections ─────────────────────────────────────────
@@ -141,15 +141,15 @@ def list_collections():
 @app.route("/api/collections", methods=["POST"])
 def create_collection():
     uid = get_user_id()
-    data = request.json
+    data = request.json or {}
     collection = {
         "id": str(uuid.uuid4()),
         "user_id": uid,
-        "name": data.get("name", "Untitled Collection"),
+        "name": data.get("name", "Untitled Collection")[:100],
         "description": data.get("description", ""),
     }
     result = get_sb().table("collections").insert(collection).execute()
-    return jsonify(result.data[0])
+    return jsonify(result.data[0] if result.data else collection)
 
 @app.route("/api/collections/<collection_id>", methods=["DELETE"])
 def delete_collection(collection_id):
@@ -160,14 +160,14 @@ def delete_collection(collection_id):
 @app.route("/api/generate/video", methods=["POST"])
 def generate_video():
     uid = get_user_id()
-    data = request.json
+    data = request.json or {}
     clip_id = str(uuid.uuid4())
     job_id = f"job_{clip_id[:8]}"
     clip = {
         "id": clip_id,
-        "project_id": data["project_id"],
+        "project_id": data.get("project_id", ""),
         "position": data.get("position", 0),
-        "prompt": data["prompt"],
+        "prompt": data.get("prompt", ""),
         "ingredients_used": json.dumps(data.get("ingredient_ids", [])),
         "camera_settings": json.dumps(data.get("camera_settings", {})),
         "duration_sec": data.get("duration_sec", 8),
@@ -176,22 +176,22 @@ def generate_video():
     }
     get_sb().table("clips").insert(clip).execute()
 
-    # Try to trigger GPU job via GitHub Actions
     try:
         trigger_github_action(data, job_id)
-    except:
+    except Exception:
         pass
 
     return jsonify({"job_id": job_id, "clip_id": clip_id, "status": "queued"})
 
 @app.route("/api/generate/image", methods=["POST"])
 def generate_image():
-    data = request.json
+    data = request.json or {}
     prompt = data.get("prompt", "")
     w = data.get("width", 1280)
     h = data.get("height", 720)
     seed = data.get("seed", int(time.time()))
-    url = f"https://image.pollinations.ai/prompt/{prompt}?width={w}&height={h}&model=flux&nologo=true&seed={seed}"
+    encoded_prompt = urllib.parse.quote(prompt)
+    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={w}&height={h}&model=flux&nologo=true&seed={seed}"
     return jsonify({"image_url": url})
 
 @app.route("/api/generate/<job_id>/status", methods=["GET"])
@@ -210,16 +210,16 @@ def list_clips(project_id):
 
 @app.route("/api/projects/<project_id>/clips/reorder", methods=["POST"])
 def reorder_clips(project_id):
-    data = request.json
+    data = request.json or {}
     for i, clip_id in enumerate(data.get("clip_ids", [])):
         get_sb().table("clips").update({"position": i}).eq("id", clip_id).execute()
     return jsonify({"status": "reordered"})
 
 @app.route("/api/projects/<project_id>/clips/<clip_id>", methods=["PUT"])
 def update_clip(project_id, clip_id):
-    data = request.json
+    data = request.json or {}
     allowed = {k: v for k, v in data.items() if k in ("position", "prompt", "duration_sec", "camera_settings", "status", "video_url")}
-    if "camera_settings" in allowed:
+    if "camera_settings" in allowed and isinstance(allowed["camera_settings"], dict):
         allowed["camera_settings"] = json.dumps(allowed["camera_settings"])
     if allowed:
         get_sb().table("clips").update(allowed).eq("id", clip_id).execute()
@@ -227,40 +227,47 @@ def update_clip(project_id, clip_id):
 
 @app.route("/api/projects/<project_id>/clips/<clip_id>", methods=["DELETE"])
 def delete_clip(project_id, clip_id):
+    get_sb().table("voiceovers").delete().eq("clip_id", clip_id).execute()
     get_sb().table("clips").delete().eq("id", clip_id).execute()
     return jsonify({"status": "deleted"})
 
 # ── Voiceover ───────────────────────────────────────────
 @app.route("/api/generate/voiceover", methods=["POST"])
-async def generate_voiceover():
-    data = request.json
+def generate_voiceover():
+    data = request.json or {}
     text = data.get("text", "")
     voice = data.get("voice", "en-US-AriaNeural")
     clip_id = data.get("clip_id")
 
-    import edge_tts
-    import tempfile
-    import os
+    try:
+        import edge_tts
+        import asyncio
+        import tempfile
 
-    output_path = os.path.join(tempfile.gettempdir(), f"vo_{uuid.uuid4().hex[:8]}.mp3")
-    communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(output_path)
+        output_path = os.path.join(tempfile.gettempdir(), f"vo_{uuid.uuid4().hex[:8]}.mp3")
 
-    with open(output_path, "rb") as f:
-        audio_data = f.read()
+        async def _gen():
+            communicate = edge_tts.Communicate(text, voice)
+            await communicate.save(output_path)
 
-    vo_id = str(uuid.uuid4())
-    vo = {
-        "id": vo_id,
-        "clip_id": clip_id,
-        "text": text,
-        "voice": voice,
-        "audio_url": "",
-    }
-    get_sb().table("voiceovers").insert(vo).execute()
+        asyncio.run(_gen())
 
-    os.remove(output_path)
-    return jsonify({"voiceover_id": vo_id, "status": "generated"})
+        vo_id = str(uuid.uuid4())
+        vo = {
+            "id": vo_id,
+            "clip_id": clip_id or "",
+            "text": text,
+            "voice": voice,
+            "audio_url": "",
+        }
+        get_sb().table("voiceovers").insert(vo).execute()
+
+        if os.path.exists(output_path):
+            os.remove(output_path)
+
+        return jsonify({"voiceover_id": vo_id, "status": "generated"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/generate/voices", methods=["GET"])
 def list_voices():
@@ -287,11 +294,7 @@ def list_voices():
 @app.route("/api/export/<project_id>/start", methods=["POST"])
 def start_export(project_id):
     export_id = str(uuid.uuid4())
-    export = {
-        "id": export_id,
-        "project_id": project_id,
-        "status": "queued",
-    }
+    export = {"id": export_id, "project_id": project_id, "status": "queued"}
     get_sb().table("exports").insert(export).execute()
     return jsonify({"export_id": export_id, "status": "queued"})
 
@@ -304,7 +307,6 @@ def export_status(project_id):
 
 # ── GitHub Actions Trigger ──────────────────────────────
 def trigger_github_action(data, job_id):
-    import httpx
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         return
@@ -323,14 +325,17 @@ def trigger_github_action(data, job_id):
             "aspect_ratio": data.get("aspect_ratio", "16:9"),
         },
     }
-    httpx.post(
-        "https://api.github.com/repos/sanketh-l/cinevo-gpu/dispatches",
-        headers=headers,
-        json=payload,
-        timeout=10,
-    )
+    try:
+        httpx.post(
+            "https://api.github.com/repos/sanketh-l/cinevo-gpu/dispatches",
+            headers=headers,
+            json=payload,
+            timeout=10,
+        )
+    except Exception:
+        pass
 
-# ── Vercel Serverless Entry ─────────────────────────────
+# ── Vercel Entry ────────────────────────────────────────
 application = app
 
 if __name__ == "__main__":

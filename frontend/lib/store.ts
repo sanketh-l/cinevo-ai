@@ -11,9 +11,8 @@ interface AppState {
   prompt: string;
   generating: boolean;
   generatingImage: boolean;
-  activeTab: "generate" | "timeline";
   previewClip: Clip | null;
-  sidebarTab: "ingredients" | "library" | "collections";
+  sidebarTab: "ingredients" | "collections";
 
   setProjects: (p: Project[]) => void;
   setCurrentProject: (p: Project | null) => void;
@@ -31,9 +30,8 @@ interface AppState {
   setPrompt: (p: string) => void;
   setGenerating: (g: boolean) => void;
   setGeneratingImage: (g: boolean) => void;
-  setActiveTab: (t: "generate" | "timeline") => void;
   setPreviewClip: (c: Clip | null) => void;
-  setSidebarTab: (t: "ingredients" | "library" | "collections") => void;
+  setSidebarTab: (t: "ingredients" | "collections") => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -46,7 +44,6 @@ export const useAppStore = create<AppState>((set) => ({
   prompt: "",
   generating: false,
   generatingImage: false,
-  activeTab: "generate",
   previewClip: null,
   sidebarTab: "ingredients",
 
@@ -56,7 +53,7 @@ export const useAppStore = create<AppState>((set) => ({
   addIngredient: (i) => set((s) => ({ ingredients: [i, ...s.ingredients] })),
   removeIngredient: (id) => set((s) => ({ ingredients: s.ingredients.filter((i) => i.id !== id) })),
   setClips: (clips) => set({ clips }),
-  addClip: (c) => set((s) => ({ clips: [c, ...s.clips] })),
+  addClip: (c) => set((s) => ({ clips: [...s.clips, c] })),
   updateClip: (id, data) => set((s) => ({ clips: s.clips.map((c) => (c.id === id ? { ...c, ...data } : c)) })),
   removeClip: (id) => set((s) => ({ clips: s.clips.filter((c) => c.id !== id) })),
   setCollections: (collections) => set({ collections }),
@@ -73,7 +70,6 @@ export const useAppStore = create<AppState>((set) => ({
   setPrompt: (prompt) => set({ prompt }),
   setGenerating: (generating) => set({ generating }),
   setGeneratingImage: (generatingImage) => set({ generatingImage }),
-  setActiveTab: (activeTab) => set({ activeTab }),
   setPreviewClip: (previewClip) => set({ previewClip }),
   setSidebarTab: (sidebarTab) => set({ sidebarTab }),
 }));
