@@ -1,0 +1,218 @@
+"""Kaggle CLI runner - uses the kaggle CLI to push and run a notebook."""
+import os
+import json
+import subprocess
+import time
+import sys
+import requests
+
+SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
+SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
+CLIP_ID = os.environ["DISPATCH_CLIP_ID"]
+JOB_ID = os.environ["DISPATCH_JOB_ID"]
+PROMPT = os.environ["DISPATCH_PROMPT"]
+DURATION = int(os.environ.get("DISPATCH_DURATION", "8"))
+WIDTH = int(os.environ.get("DISPATCH_WIDTH", "832"))
+HEIGHT = int(os.environ.get("DISPATCH_HEIGHT", "480"))
+NUM_FRAMES = int(os.environ.get("DISPATCH_NUM_FRAMES", "64"))
+USERNAME = os.environ["KAGGLE_USERNAME"]
+
+HEADERS = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
+
+
+def update_clip(status, video_url=None):
+    payload = {"status": status}
+    if video_url:
+        payload["video_url"] = video_url
+    requests.patch(
+        f"{SUPABASE_URL}/rest/v1/clips?id=eq.{CLIP_ID}",
+        headers={**HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"},
+        json=payload, timeout=30
+    )
+
+
+def build_notebook():
+    code = f'''
+import torch, os, json, requests
+PROMPT = {repr(PROMPT)}
+CLIP_ID = {repr(CLIP_ID)}
+JOB_ID = {repr(JOB_ID)}
+WIDTH = {WIDTH}
+HEIGHT = {HEIGHT}
+NUM_FRAMES = {NUM_FRAMES}
+SUPABASE_URL = {repr(SUPABASE_URL)}
+SUPABASE_KEY = {repr(SUPABASE_SERVICE_KEY)}
+HEADERS = {{"apikey": SUPABASE_KEY, "Authorization": f"Bearer {{SUPABASE_KEY}}"}}
+
+def update_clip(status, url=None):
+    p = {{"status": status}}
+    if url: p["video_url"] = url
+    requests.patch(f"{{SUPABASE_URL}}/rest/v1/clips?id=eq.{{CLIP_ID}}",
+        headers={{**HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"}},
+        json=p, timeout=30)
+
+print(f"CUDA: {{torch.cuda.is_available()}}")
+if torch.cuda.is_available():
+    print(f"GPU: {{torch.cuda.get_device_name(0)}}")
+update_clip("generating")
+try:
+    from diffusers import WanPipeline
+    from diffusers.utils import export_to_video
+    import imageio, numpy as np
+    pipe = WanPipeline.from_pretrained("Wan-AI/Wan2.1-T2V-14B-FP8", torch_dtype=torch.float16)
+    pipe.to("cuda")
+    print("Model loaded!")
+    out = pipe(prompt=PROMPT, num_frames=NUM_FRAMES, width=WIDTH, height=HEIGHT,
+               num_inference_steps=50, guidance_scale=5.0)
+    frames = out.frames[0]
+    vf = []
+    for f in frames:
+        a = f.cpu().numpy() if isinstance(f, torch.Tensor) else f
+        if a.ndim == 3 and a.shape[0] in [1,3]: a = np.transpose(a,(1,2,0))
+        vf.append((a*255).astype(np.uint8))
+    pth = "/kaggle/working/output.mp4"
+    imageio.mimsave(pth, vf, fps=16)
+    with open(pth,"rb") as fh: data = fh.read()
+    requests.post(f"{{SUPABASE_URL}}/storage/v1/object/videos/{{JOB_ID}}/video.mp4",
+        headers={{**HEADERS, "Content-Type": "video/mp4", "x-upsert": "true"}},
+        data=data, timeout=120)
+    url = f"{{SUPABASE_URL}}/storage/v1/object/public/videos/{{JOB_ID}}/video.mp4"
+    update_clip("ready", url)
+    print(f"DONE: {{url}}")
+except Exception as e:
+    print(f"FAILED: {{e}}")
+    update_clip("failed")
+'''
+    notebook = {
+        "cells": [
+            {"cell_type": "markdown", "metadata": {}, "source": ["# Cinevo Wan 2.1 Inference"]},
+            {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+             "source": ["!pip install -q diffusers transformers accelerate safetensors imageio imageio-ffmpeg torch torchvision"]},
+            {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+             "source": [code]},
+        ],
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python", "version": "3.10.0"},
+        },
+        "nbformat": 4,
+        "nbformat_minor": 4,
+    }
+    return notebook
+
+
+def main():
+    update_clip("generating")
+
+    # Build notebook and metadata
+    notebook = build_notebook()
+    kernel_slug = f"{USERNAME}/cinevo-{JOB_ID}"
+    title = f"Cinevo {JOB_ID}"
+
+    work_dir = f"/tmp/kaggle_{JOB_ID}"
+    os.makedirs(work_dir, exist_ok=True)
+
+    # Write notebook file
+    with open(f"{work_dir}/notebook.ipynb", "w") as f:
+        json.dump(notebook, f)
+
+    # Write kernel metadata
+    metadata = {
+        "id": kernel_slug,
+        "title": title,
+        "code_file": "notebook.ipynb",
+        "language": "python",
+        "kernel_type": "notebook",
+        "is_private": "true",
+        "enable_gpu": "true",
+        "enable_internet": "true",
+        "dataset_sources": [],
+        "competition_sources": [],
+        "kernel_sources": [],
+        "model_sources": [],
+    }
+    with open(f"{work_dir}/kernel-metadata.json", "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    print(f"Pushing kernel: {kernel_slug}")
+    result = subprocess.run(
+        ["kaggle", "kernels", "push", "-p", work_dir],
+        capture_output=True, text=True, timeout=60
+    )
+    print(f"Push stdout: {result.stdout}")
+    print(f"Push stderr: {result.stderr}")
+
+    if result.returncode != 0:
+        print(f"Push failed with return code {result.returncode}")
+        update_clip("failed")
+        return
+
+    # Wait for kernel to start running
+    print("Waiting for kernel to start...")
+    time.sleep(10)
+
+    # Poll kernel status
+    max_wait = 600  # 10 minutes
+    start = time.time()
+    while time.time() - start < max_wait:
+        result = subprocess.run(
+            ["kaggle", "kernels", "status", kernel_slug, "-v"],
+            capture_output=True, text=True, timeout=30
+        )
+        status_output = result.stdout.strip()
+        print(f"Status: {status_output}")
+
+        if "complete" in status_output.lower():
+            print("Kernel complete!")
+            # Check if the clip was already updated by the notebook itself
+            time.sleep(5)
+            clip_resp = requests.get(
+                f"{SUPABASE_URL}/rest/v1/clips?id=eq.{CLIP_ID}&select=status,video_url",
+                headers=HEADERS, timeout=30
+            )
+            if clip_resp.status_code == 200 and clip_resp.json():
+                clip = clip_resp.json()[0]
+                if clip.get("status") == "ready" and clip.get("video_url"):
+                    print(f"Clip ready: {clip['video_url']}")
+                    return
+            # If notebook didn't update, try downloading output
+            print("Trying to download output...")
+            dl_result = subprocess.run(
+                ["kaggle", "kernels", "output", kernel_slug, "-p", work_dir, "-v"],
+                capture_output=True, text=True, timeout=120
+            )
+            print(f"Download: {dl_result.stdout} {dl_result.stderr}")
+
+            # Check for output video
+            video_path = f"{work_dir}/output.mp4"
+            if os.path.exists(video_path):
+                print(f"Found output video at {video_path}")
+                with open(video_path, "rb") as vf:
+                    data = vf.read()
+                upload_url = f"{SUPABASE_URL}/storage/v1/object/videos/{JOB_ID}/video.mp4"
+                requests.post(upload_url, headers={**HEADERS, "Content-Type": "video/mp4", "x-upsert": "true"}, data=data, timeout=120)
+                public_url = f"{SUPABASE_URL}/storage/v1/object/public/videos/{JOB_ID}/video.mp4"
+                update_clip("ready", public_url)
+                print(f"DONE: {public_url}")
+            return
+
+        if "error" in status_output.lower() or "fail" in status_output.lower():
+            print("Kernel failed!")
+            update_clip("failed")
+            return
+
+        time.sleep(30)
+
+    print("Timeout waiting for kernel")
+    update_clip("failed")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"FATAL: {e}")
+        try:
+            update_clip("failed")
+        except:
+            pass

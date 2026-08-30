@@ -1,0 +1,35 @@
+name: Kaggle Wan Inference
+
+on:
+  repository_dispatch:
+    types: [kaggle_generate_video]
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install kaggle requests
+
+      - name: Push and run Kaggle notebook
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DISPATCH_CLIP_ID: ${{ github.event.client_payload.clip_id }}
+          DISPATCH_JOB_ID: ${{ github.event.client_payload.job_id }}
+          DISPATCH_PROMPT: ${{ github.event.client_payload.prompt }}
+          DISPATCH_DURATION: ${{ github.event.client_payload.duration_sec || "8" }}
+          DISPATCH_WIDTH: ${{ github.event.client_payload.width || "832" }}
+          DISPATCH_HEIGHT: ${{ github.event.client_payload.height || "480" }}
+          DISPATCH_NUM_FRAMES: ${{ github.event.client_payload.num_frames || "64" }}
+        run: python gpu-runner/kaggle_cli_runner.py

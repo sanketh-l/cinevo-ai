@@ -57,6 +57,58 @@ def storage_upload(bucket, file_name, content, content_type):
 def health():
     return jsonify({"status": "ok", "service": "cinevo"})
 
+@app.route("/api/debug/kaggle")
+def debug_kaggle():
+    """Test Kaggle API connection and return details."""
+    result = {
+        "username": kaggle.username[:4] + "..." if kaggle.username else "NOT SET",
+        "key_present": bool(kaggle.key),
+        "available": kaggle.available,
+        "username_full_length": len(kaggle.username) if kaggle.username else 0,
+        "key_length": len(kaggle.key) if kaggle.key else 0,
+    }
+    if kaggle.available:
+        try:
+            # Test list
+            resp = httpx.get(
+                "https://www.kaggle.com/api/v1/kernels/list",
+                auth=kaggle._auth(),
+                timeout=15,
+            )
+            result["list_status"] = resp.status_code
+
+            # Test push with minimal notebook
+            import tempfile
+            test_nb = json.dumps({
+                "cells": [{"cell_type": "code", "source": ["print('test')"], "metadata": {}, "outputs": []}],
+                "metadata": {},
+                "nbformat": 4, "nbformat_minor": 4,
+            })
+            push_resp = httpx.post(
+                "https://www.kaggle.com/api/v1/kernels/push",
+                json={
+                    "slug": f"{kaggle.username}/cinevo-health-check",
+                    "newTitle": "Cinevo Health Check",
+                    "text": test_nb,
+                    "language": "python",
+                    "kernelType": "notebook",
+                    "enableGpu": False,
+                    "enableInternet": False,
+                    "isPrivate": True,
+                },
+                auth=kaggle._auth(),
+                timeout=30,
+            )
+            result["push_status"] = push_resp.status_code
+            push_data = push_resp.json()
+            result["push_error"] = push_data.get("error", "")
+            result["push_has_error"] = push_data.get("hasError", False)
+            if not push_data.get("hasError"):
+                result["push_kernel_id"] = push_data.get("kernelId")
+        except Exception as e:
+            result["error"] = str(e)
+    return jsonify(result)
+
 @app.route("/api/accounts/status")
 def account_status():
     kaggle_accounts = len([k for k in ("KAGGLE_ACCOUNT_1_KEY", "KAGGLE_ACCOUNT_2_KEY") if os.environ.get(k)])
@@ -242,6 +294,7 @@ def generate_video():
 
     # Try Kaggle first (real Wan 2.1), fall back to GitHub Actions (FFmpeg fallback)
     runner_used = "github_actions"
+    print(f"[kaggle] available={kaggle.available}, username={repr(kaggle.username[:4] if kaggle.username else '')}")
     if kaggle.available:
         try:
             ref_url = reference_images[0]["image_url"] if reference_images else None
@@ -254,14 +307,30 @@ def generate_video():
             else:
                 w, h = 832, 480
             num_frames = max(1, int(data.get("duration_sec", 8) * 16))
-            kaggle.push_and_run(
-                prompt=data.get("prompt", ""),
-                clip_id=clip_id,
-                job_id=job_id,
-                reference_image_url=ref_url,
-                width=w, height=h, num_frames=num_frames,
-            )
-            runner_used = "kaggle"
+
+            # Dispatch Kaggle workflow via GitHub Actions
+            token = os.environ.get("GITHUB_TOKEN", "")
+            if token:
+                dispatch_payload = {
+                    "clip_id": clip_id,
+                    "job_id": job_id,
+                    "prompt": data.get("prompt", ""),
+                    "duration_sec": str(data.get("duration_sec", 8)),
+                    "width": str(w),
+                    "height": str(h),
+                    "num_frames": str(num_frames),
+                }
+                gh_resp = httpx.post(
+                    "https://api.github.com/repos/sanketh-l/cinevo-ai/dispatches",
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"},
+                    json={"event_type": "kaggle_generate_video", "client_payload": dispatch_payload},
+                    timeout=10,
+                )
+                print(f"[kaggle] dispatch: {gh_resp.status_code}")
+                if gh_resp.status_code in (200, 204):
+                    runner_used = "kaggle"
+                else:
+                    print(f"[kaggle] dispatch failed: {gh_resp.text[:200]}")
         except Exception as e:
             print(f"[kaggle] Failed, falling back to GH Actions: {e}")
             runner_used = "github_actions_fallback"
@@ -465,36 +534,30 @@ class KaggleRunner:
         kernel_slug = f"{self.username}/cinevo-{job_id}"
 
         payload = {
-            "id": kernel_slug,
-            "source": {
-                "type": "notebook",
-                "language": "python",
-                "source": notebook_source,
-            },
-            "metadata": {
-                "enableGpu": True,
-                "enableInternet": True,
-            },
+            "slug": kernel_slug,
+            "newTitle": f"Cinevo - {prompt[:40]}",
+            "text": notebook_source,
+            "language": "python",
+            "kernelType": "notebook",
+            "enableGpu": True,
+            "enableInternet": True,
+            "isPrivate": True,
         }
-        resp = httpx.put(
+        resp = httpx.post(
             "https://www.kaggle.com/api/v1/kernels/push",
             json=payload,
             auth=self._auth(),
-            timeout=30,
+            timeout=60,
         )
+        print(f"[kaggle] push response: {resp.status_code} {resp.text[:300]}")
         if resp.status_code not in (200, 201):
             raise RuntimeError(f"Kaggle push: {resp.status_code} {resp.text[:200]}")
 
-        run_resp = httpx.post(
-            "https://www.kaggle.com/api/v1/kernels/runs",
-            json={"kernelSlug": kernel_slug},
-            auth=self._auth(),
-            timeout=30,
-        )
-        if run_resp.status_code not in (200, 201, 204):
-            raise RuntimeError(f"Kaggle run: {run_resp.status_code} {run_resp.text[:200]}")
+        resp_data = resp.json()
+        if resp_data.get("hasError"):
+            raise RuntimeError(f"Kaggle push error: {resp_data.get('error')}")
 
-        return {"kernel_slug": kernel_slug, "status": "triggered"}
+        return {"kernel_slug": kernel_slug, "kernel_id": resp_data.get("kernelId"), "status": "triggered"}
 
     def check_status(self, kernel_slug):
         resp = httpx.get(
