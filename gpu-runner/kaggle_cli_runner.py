@@ -32,7 +32,7 @@ def update_clip(status, video_url=None):
 
 def get_clip_status():
     r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/clips?id=eq.{CLIP_ID}&select=status,video_url",
+        f"{SUPABASE_URL}/rest/v1/clips?id=eq.{CLIP_ID}&select=status,video_url,error_message",
         headers=HEADERS, timeout=30
     )
     if r.status_code == 200 and r.json():
@@ -58,7 +58,7 @@ def safe_patch(data):
         r = requests.patch(f"{{SUPABASE_URL}}/rest/v1/clips?id=eq.{{CLIP_ID}}",
             headers={{**HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"}},
             json=data, timeout=30)
-        print(f"PATCH {{data}} -> {{r.status_code}}")
+        print(f"PATCH {{json.dumps(data, default=str)[:200]}} -> {{r.status_code}} {{r.text[:200]}}")
     except Exception as e:
         print(f"PATCH failed: {{e}}")
 
@@ -95,17 +95,21 @@ try:
     else:
         print("No GPU - generating fallback video")
         vf = []
-        ys = np.arange(HEIGHT).reshape(-1, 1)
-        xs = np.arange(WIDTH).reshape(1, -1)
-        dx = (xs - WIDTH / 2.0) / WIDTH
-        dy = (ys - HEIGHT / 2.0) / HEIGHT
+        ys = np.linspace(-1, 1, HEIGHT).reshape(-1, 1)
+        xs = np.linspace(-1, 1, WIDTH).reshape(1, -1)
         for i in range(NUM_FRAMES):
             t = i / max(NUM_FRAMES - 1, 1)
-            phase = t * 6.28
-            v = (128 + 127 * np.sin(dx * 10 + phase + dy * 8)).astype(np.uint8)
-            r = np.clip(20 + int(60*t) + v // 3, 0, 255).astype(np.uint8)
-            g = np.clip(40 + int(80*(1-t)) + v // 4, 0, 255).astype(np.uint8)
-            b = np.clip(100 + int(100*t) + v // 5, 0, 255).astype(np.uint8)
+            phase = t * 2 * np.pi
+            cx, cy = np.cos(phase), np.sin(phase)
+            dx = xs - cx * 0.3
+            dy = ys - cy * 0.3
+            dist = np.sqrt(dx**2 + dy**2)
+            wave1 = np.sin(dist * 8 - phase * 2) * 0.5 + 0.5
+            wave2 = np.sin(xs * 5 + phase) * np.cos(ys * 4 - phase * 0.7) * 0.5 + 0.5
+            wave3 = np.sin((xs + ys) * 3 + phase * 1.5) * 0.5 + 0.5
+            r = (30 + 180 * wave1 * (1 - t * 0.3) + 45 * wave3).clip(0, 255).astype(np.uint8)
+            g = (20 + 120 * wave2 * (1 - t * 0.5) + 60 * wave1).clip(0, 255).astype(np.uint8)
+            b = (80 + 140 * wave3 * t + 35 * wave2).clip(0, 255).astype(np.uint8)
             vf.append(np.stack([r, g, b], axis=-1))
         print(f"Generated {{len(vf)}} fallback frames")
 
@@ -127,7 +131,8 @@ except BaseException as e:
     tb = traceback.format_exc()
     print(f"FAILED: {{e}}")
     print(tb)
-    safe_patch({{"status": "failed", "camera_settings": {{"error": tb[-400:]}}}})
+    err_msg = tb[-500:] if len(tb) > 500 else tb
+    safe_patch({{"status": "failed", "error_message": err_msg}})
 '''
     return {
         "cells": [
@@ -203,7 +208,7 @@ def main():
                 print(f"Clip ready: {clip.get('video_url')}")
                 return
             if status == "failed":
-                print("Notebook reported failure")
+                print(f"Notebook reported failure: {clip.get('error_message', 'no error_message')}")
                 return
         time.sleep(30)
 

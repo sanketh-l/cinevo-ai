@@ -136,7 +136,7 @@ export default function ProjectPage() {
             updateClip(res.data.clip_id, { status: "ready", video_url: res.data.video_url });
             setPollingJobs((prev) => { const n = new Set(prev); n.delete(jobId); return n; });
           } else if (res.data.status === "failed") {
-            updateClip(res.data.clip_id, { status: "failed" });
+            updateClip(res.data.clip_id, { status: "failed", error_message: res.data.error_message });
             setPollingJobs((prev) => { const n = new Set(prev); n.delete(jobId); return n; });
           }
         } catch { /* retry next tick */ }
@@ -701,7 +701,14 @@ export default function ProjectPage() {
                             {clip.status === "queued" || clip.status === "generating" ? (
                               <Loader2 className="w-5 h-5 text-white/20 animate-spin" />
                             ) : clip.status === "failed" ? (
-                              <span className="text-red-400/50 text-[10px]">Failed</span>
+                              <div className="text-center px-1">
+                                <span className="text-red-400/50 text-[10px] block">Failed</span>
+                                {clip.error_message && (
+                                  <span className="text-red-400/30 text-[8px] block mt-0.5 max-w-[120px] truncate" title={clip.error_message}>
+                                    {clip.error_message.slice(0, 60)}...
+                                  </span>
+                                )}
+                              </div>
                             ) : (
                               <Play className="w-5 h-5 text-white/20" />
                             )}

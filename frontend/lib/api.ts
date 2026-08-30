@@ -39,6 +39,7 @@ export interface Clip {
   duration_sec: number;
   status: string;
   job_id: string | null;
+  error_message: string | null;
   created_at: string;
 }
 

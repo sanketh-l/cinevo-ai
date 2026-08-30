@@ -380,7 +380,12 @@ def job_status(job_id):
     if not result.data:
         return jsonify({"error": "Job not found"}), 404
     clip = result.data[0]
-    return jsonify({"status": clip["status"], "video_url": clip.get("video_url"), "clip_id": clip["id"]})
+    return jsonify({
+        "status": clip["status"],
+        "video_url": clip.get("video_url"),
+        "clip_id": clip["id"],
+        "error_message": clip.get("error_message"),
+    })
 
 # ── Clips ───────────────────────────────────────────────
 @app.route("/api/projects/<project_id>/clips", methods=["GET"])
@@ -398,7 +403,7 @@ def reorder_clips(project_id):
 @app.route("/api/projects/<project_id>/clips/<clip_id>", methods=["PUT"])
 def update_clip(project_id, clip_id):
     data = request.json or {}
-    allowed = {k: v for k, v in data.items() if k in ("position", "prompt", "duration_sec", "camera_settings", "status", "video_url", "thumbnail_url")}
+    allowed = {k: v for k, v in data.items() if k in ("position", "prompt", "duration_sec", "camera_settings", "status", "video_url", "thumbnail_url", "error_message")}
     if "camera_settings" in allowed and isinstance(allowed["camera_settings"], dict):
         allowed["camera_settings"] = json.dumps(allowed["camera_settings"])
     if allowed:
@@ -573,7 +578,7 @@ class KaggleRunner:
         sb_url = os.environ["SUPABASE_URL"].rstrip("/")
         sb_key = os.environ["SUPABASE_SERVICE_KEY"]
         code = f'''
-import torch, os, json, requests
+import torch, os, json, requests, traceback
 PROMPT = {repr(prompt)}
 CLIP_ID = {repr(clip_id)}
 JOB_ID = {repr(job_id)}
@@ -585,48 +590,67 @@ SUPABASE_URL = {repr(sb_url)}
 SUPABASE_KEY = {repr(sb_key)}
 HEADERS = {{"apikey": SUPABASE_KEY, "Authorization": f"Bearer {{SUPABASE_KEY}}"}}
 
-def update_clip(status, url=None):
-    p = {{"status": status}}
-    if url: p["video_url"] = url
-    requests.patch(f"{{SUPABASE_URL}}/rest/v1/clips?id=eq.{{CLIP_ID}}",
-        headers={{**HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"}},
-        json=p, timeout=30)
+def safe_patch(data):
+    try:
+        r = requests.patch(f"{{SUPABASE_URL}}/rest/v1/clips?id=eq.{{CLIP_ID}}",
+            headers={{**HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"}},
+            json=data, timeout=30)
+        print(f"PATCH {{json.dumps(data, default=str)[:200]}} -> {{r.status_code}} {{r.text[:200]}}")
+    except Exception as e:
+        print(f"PATCH failed: {{e}}")
 
-print(f"CUDA: {{torch.cuda.is_available()}}")
-update_clip("generating")
+safe_patch({{"status": "generating"}})
+
+has_cuda = False
 try:
-    from diffusers import WanPipeline
-    from diffusers.utils import export_to_video
-    import imageio, numpy as np
-    pipe = WanPipeline.from_pretrained("Wan-AI/Wan2.1-T2V-14B-FP8", torch_dtype=torch.float16)
-    pipe.to("cuda")
-    print("Model loaded!")
-    out = pipe(prompt=PROMPT, num_frames=NUM_FRAMES, width=WIDTH, height=HEIGHT,
-               num_inference_steps=50, guidance_scale=5.0)
-    frames = out.frames[0]
-    vf = []
-    for f in frames:
-        a = f.cpu().numpy() if isinstance(f, torch.Tensor) else f
-        if a.ndim == 3 and a.shape[0] in [1,3]: a = np.transpose(a,(1,2,0))
-        vf.append((a*255).astype(np.uint8))
-    pth = "/kaggle/working/output.mp4"
-    imageio.mimsave(pth, vf, fps=16)
-    with open(pth,"rb") as fh: data = fh.read()
-    requests.post(f"{{SUPABASE_URL}}/storage/v1/object/videos/{{JOB_ID}}/video.mp4",
-        headers={{**HEADERS, "Content-Type": "video/mp4", "x-upsert": "true"}},
-        data=data, timeout=120)
-    url = f"{{SUPABASE_URL}}/storage/v1/object/public/videos/{{JOB_ID}}/video.mp4"
-    update_clip("ready", url)
-    print(f"DONE: {{url}}")
+    has_cuda = torch.cuda.is_available()
+    print(f"CUDA: {{has_cuda}}")
+    if has_cuda:
+        print(f"GPU: {{torch.cuda.get_device_name(0)}}")
 except Exception as e:
+    print(f"torch check failed: {{e}}")
+
+try:
+    if has_cuda:
+        from diffusers import WanPipeline
+        import imageio, numpy as np
+        print("Loading Wan2.1-T2V-1.3B model...")
+        pipe = WanPipeline.from_pretrained("Wan-AI/Wan2.1-T2V-1.3B", torch_dtype=torch.float16)
+        pipe.to("cuda")
+        print("Model loaded!")
+        print(f"Generating {{NUM_FRAMES}} frames at {{WIDTH}}x{{HEIGHT}}...")
+        out = pipe(prompt=PROMPT, num_frames=NUM_FRAMES, width=WIDTH, height=HEIGHT,
+                   num_inference_steps=30, guidance_scale=5.0)
+        frames = out.frames[0]
+        vf = []
+        for f in frames:
+            a = f.cpu().numpy() if isinstance(f, torch.Tensor) else f
+            if a.ndim == 3 and a.shape[0] in [1,3]: a = np.transpose(a,(1,2,0))
+            vf.append((a*255).astype(np.uint8))
+        pth = "/kaggle/working/output.mp4"
+        imageio.mimsave(pth, vf, fps=16)
+        with open(pth,"rb") as fh: data = fh.read()
+        requests.post(f"{{SUPABASE_URL}}/storage/v1/object/videos/{{JOB_ID}}/video.mp4",
+            headers={{**HEADERS, "Content-Type": "video/mp4", "x-upsert": "true"}},
+            data=data, timeout=180)
+        url = f"{{SUPABASE_URL}}/storage/v1/object/public/videos/{{JOB_ID}}/video.mp4"
+        safe_patch({{"status": "ready", "video_url": url}})
+        print(f"DONE: {{url}}")
+    else:
+        print("No GPU available")
+        safe_patch({{"status": "failed", "error_message": "No GPU available on this Kaggle instance. CUDA: False"}})
+except BaseException as e:
+    tb = traceback.format_exc()
     print(f"FAILED: {{e}}")
-    update_clip("failed")
+    print(tb)
+    err_msg = tb[-500:] if len(tb) > 500 else tb
+    safe_patch({{"status": "failed", "error_message": err_msg}})
 '''
         notebook = {
             "cells": [
                 {"cell_type": "markdown", "metadata": {}, "source": ["# Cinevo Wan 2.1 Inference"]},
                 {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
-                 "source": ["!pip install -q diffusers transformers accelerate safetensors imageio imageio-ffmpeg torch torchvision"]},
+                 "source": ["import imageio, numpy; print('OK:', imageio.__version__, numpy.__version__)"]},
                 {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
                  "source": [code]},
             ],
