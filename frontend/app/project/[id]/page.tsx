@@ -61,6 +61,8 @@ export default function ProjectPage() {
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [accountStatus, setAccountStatus] = useState<AccountStatus | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportUrl, setExportUrl] = useState<string | null>(null);
 
   // Load Data
   const loadData = useCallback(async () => {
@@ -261,9 +263,29 @@ export default function ProjectPage() {
   // Export
   const handleExport = async () => {
     try {
+      setExporting(true);
+      setExportUrl(null);
       await exportApi.start(projectId);
-      alert("Export started! Check back soon.");
+      const startedAt = Date.now();
+      const poll = setInterval(async () => {
+        try {
+          const res = await exportApi.status(projectId);
+          if (res.data.status === "done" && res.data.final_video_url) {
+            setExportUrl(res.data.final_video_url);
+            setExporting(false);
+            clearInterval(poll);
+          }
+          if (res.data.status === "failed" || Date.now() - startedAt > 180000) {
+            setExporting(false);
+            clearInterval(poll);
+          }
+        } catch {
+          setExporting(false);
+          clearInterval(poll);
+        }
+      }, 5000);
     } catch (err) {
+      setExporting(false);
       console.error("Export failed:", err);
     }
   };
@@ -662,9 +684,17 @@ export default function ProjectPage() {
             <span className="text-[10px] sm:text-xs font-medium text-white/50">Timeline</span>
             <span className="text-[9px] sm:text-[10px] text-white/20">{clips.length} clips</span>
           </div>
-          <Button size="sm" variant="ghost" className="h-6 sm:h-7 text-[10px] sm:text-xs text-white/40 hover:text-white" onClick={handleExport}>
-            <Download className="w-3 h-3 mr-1" /> Export
-          </Button>
+          <div className="flex items-center gap-2">
+            {exportUrl && (
+              <a href={exportUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] sm:text-xs text-green-400 hover:text-green-300">
+                Download final
+              </a>
+            )}
+            <Button size="sm" variant="ghost" className="h-6 sm:h-7 text-[10px] sm:text-xs text-white/40 hover:text-white" onClick={handleExport} disabled={exporting || clips.length === 0}>
+              {exporting ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Download className="w-3 h-3 mr-1" />}
+              {exporting ? "Exporting" : "Export"}
+            </Button>
+          </div>
         </div>
         <div className="flex-1 overflow-x-auto overflow-y-hidden p-2 sm:p-3 scrollbar-thin">
           {clips.length === 0 ? (
