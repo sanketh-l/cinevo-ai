@@ -50,4 +50,5 @@ jobs:
           DISPATCH_PROMPT: ${{ github.event.client_payload.prompt || inputs.prompt }}
           DISPATCH_DURATION: ${{ github.event.client_payload.duration_sec || inputs.duration_sec }}
           DISPATCH_ASPECT_RATIO: ${{ github.event.client_payload.aspect_ratio || inputs.aspect_ratio }}
+          DISPATCH_REFERENCE_IMAGES: ${{ toJson(github.event.client_payload.reference_images) }}
         run: python gpu-runner/fallback_video.py

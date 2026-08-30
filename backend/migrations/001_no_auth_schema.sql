@@ -113,3 +113,7 @@ create index if not exists idx_exports_project on exports(project_id);
 insert into storage.buckets (id, name, public)
 values ('videos', 'videos', true)
 on conflict (id) do update set public = true;
+
+insert into storage.buckets (id, name, public)
+values ('images', 'images', true)
+on conflict (id) do update set public = true;

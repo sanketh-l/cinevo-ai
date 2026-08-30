@@ -56,6 +56,14 @@ export interface Voice {
   language: string;
 }
 
+export interface AccountStatus {
+  supabase: { connected: boolean };
+  github_actions: { connected: boolean; workflow: string };
+  kaggle: { connected_accounts: number; mode: string };
+  huggingface: { connected: boolean; mode: string };
+  storage: { video_bucket: string; image_bucket: string };
+}
+
 export const projectsApi = {
   list: () => api.get<Project[]>("/api/projects"),
   create: (data: { name: string; aspect_ratio?: string }) => api.post<Project>("/api/projects", data),
@@ -69,8 +77,19 @@ export const ingredientsApi = {
   create: (data: Partial<Ingredient>) => api.post<Ingredient>("/api/ingredients", data),
   update: (id: string, data: Partial<Ingredient>) => api.put(`/api/ingredients/${id}`, data),
   delete: (id: string) => api.delete(`/api/ingredients/${id}`),
+  upload: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return api.post<{ image_url: string }>("/api/ingredients/upload", body, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
   generate: (data: { prompt: string; width?: number; height?: number; seed?: number }) =>
     api.post<{ image_url: string; prompt: string }>("/api/ingredients/generate", data),
+};
+
+export const accountsApi = {
+  status: () => api.get<AccountStatus>("/api/accounts/status"),
 };
 
 export const collectionsApi = {

@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import urllib.parse
 from pathlib import Path
@@ -13,6 +14,7 @@ JOB_ID = os.environ["DISPATCH_JOB_ID"]
 PROMPT = os.environ.get("DISPATCH_PROMPT", "cinematic scene")
 DURATION = max(1, int(float(os.environ.get("DISPATCH_DURATION", "8"))))
 ASPECT_RATIO = os.environ.get("DISPATCH_ASPECT_RATIO", "16:9")
+REFERENCE_IMAGES = json.loads(os.environ.get("DISPATCH_REFERENCE_IMAGES") or "[]")
 
 
 def update_clip(status, video_url=None, thumbnail_url=None):
@@ -57,8 +59,17 @@ def main():
     update_clip("generating")
 
     width, height = (720, 1280) if ASPECT_RATIO == "9:16" else (1024, 1024) if ASPECT_RATIO == "1:1" else (1280, 720)
-    encoded = urllib.parse.quote(PROMPT)
-    image_url = f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&model=flux&nologo=true&seed={abs(hash(JOB_ID)) % 1000000}"
+    reference_url = None
+    if isinstance(REFERENCE_IMAGES, list) and REFERENCE_IMAGES:
+        first = REFERENCE_IMAGES[0]
+        if isinstance(first, dict):
+            reference_url = first.get("image_url")
+
+    if reference_url:
+        image_url = reference_url
+    else:
+        encoded = urllib.parse.quote(PROMPT)
+        image_url = f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&model=flux&nologo=true&seed={abs(hash(JOB_ID)) % 1000000}"
 
     image_path = "frame.jpg"
     video_path = "video.mp4"

@@ -3,8 +3,9 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
-  projectsApi, ingredientsApi, clipsApi, collectionsApi, generateApi, exportApi,
+  projectsApi, ingredientsApi, clipsApi, collectionsApi, generateApi, exportApi, accountsApi,
   type Project, type Ingredient, type Clip, type Collection,
+  type AccountStatus,
 } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import {
   ArrowLeft, Plus, Film, Lock, Unlock, Trash2, Play, Loader2, Download,
   Image as ImageIcon, Video, GripVertical, Camera, Search, X, Check,
-  Sparkles, Clock, Menu, PanelLeftClose, PanelRightClose,
+  Sparkles, Clock, Menu, PanelRightClose, UploadCloud, Server,
 } from "lucide-react";
 
 const STYLE_PRESETS = ["Cinematic", "Film Noir", "Anime", "Realistic", "Dreamy"];
@@ -41,6 +42,7 @@ export default function ProjectPage() {
   const [notFound, setNotFound] = useState(false);
   const [ingredientDialogOpen, setIngredientDialogOpen] = useState(false);
   const [ingredientPrompt, setIngredientPrompt] = useState("");
+  const [ingredientFile, setIngredientFile] = useState<File | null>(null);
   const [collectionDialogOpen, setCollectionDialogOpen] = useState(false);
   const [newCollectionName, setNewCollectionName] = useState("");
   const [ingredientSearch, setIngredientSearch] = useState("");
@@ -58,6 +60,7 @@ export default function ProjectPage() {
   const [mobilePanel, setMobilePanel] = useState<"left" | "center" | "right">("center");
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
+  const [accountStatus, setAccountStatus] = useState<AccountStatus | null>(null);
 
   // Load Data
   const loadData = useCallback(async () => {
@@ -74,6 +77,7 @@ export default function ProjectPage() {
       setClips(clipRes.data);
       setCollections(colRes.data);
       if (projRes.data?.aspect_ratio) setAspectRatio(projRes.data.aspect_ratio);
+      accountsApi.status().then((res) => setAccountStatus(res.data)).catch(() => setAccountStatus(null));
     } catch (err) {
       console.error("Load failed:", err);
       setNotFound(true);
@@ -110,19 +114,24 @@ export default function ProjectPage() {
   // Generate Ingredient
   const handleGenerateIngredient = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ingredientPrompt.trim()) return;
+    if (!ingredientPrompt.trim() && !ingredientFile) return;
     setGeneratingImage(true);
     try {
-      const imgRes = await ingredientsApi.generate({ prompt: ingredientPrompt });
+      const imageUrl = ingredientFile
+        ? (await ingredientsApi.upload(ingredientFile)).data.image_url
+        : (await ingredientsApi.generate({ prompt: ingredientPrompt })).data.image_url;
+      const name = ingredientPrompt.trim() || ingredientFile?.name || "Uploaded Reference";
       const newIng = await ingredientsApi.create({
-        name: ingredientPrompt.slice(0, 50),
+        name: name.slice(0, 50),
         type: "character",
-        image_url: imgRes.data.image_url,
-        prompt: ingredientPrompt,
+        image_url: imageUrl,
+        prompt: ingredientPrompt || `Uploaded reference: ${ingredientFile?.name}`,
         project_id: projectId,
+        locked: true,
       });
       addIngredient(newIng.data);
       setIngredientPrompt("");
+      setIngredientFile(null);
       setIngredientDialogOpen(false);
     } catch (err) {
       console.error("Generate ingredient failed:", err);
@@ -312,6 +321,12 @@ export default function ProjectPage() {
           <span className="text-[10px] sm:text-xs px-2 py-0.5 rounded-full bg-white/5 text-white/40 flex-shrink-0 hidden sm:inline">{aspectRatio}</span>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
+          {accountStatus && (
+            <span className="hidden md:inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-white/5 text-white/35">
+              <Server className="w-3 h-3" />
+              GH {accountStatus.github_actions.connected ? "on" : "off"} · HF {accountStatus.huggingface.connected ? "on" : "off"} · KG {accountStatus.kaggle.connected_accounts}
+            </span>
+          )}
           <span className="text-[10px] sm:text-xs text-white/30 hidden sm:inline">{clips.length} clips</span>
           <button onClick={() => setRightOpen(!rightOpen)} className="hidden lg:block p-1.5 rounded-lg hover:bg-white/5 text-white/50">
             {rightOpen ? <PanelRightClose className="w-4 h-4" /> : <PanelRightClose className="w-4 h-4 opacity-50" />}
@@ -350,8 +365,13 @@ export default function ProjectPage() {
                       </DialogHeader>
                       <form onSubmit={handleGenerateIngredient} className="space-y-3 mt-2">
                         <Textarea placeholder="A young woman with short black hair, wearing a red leather jacket..." value={ingredientPrompt} onChange={(e) => setIngredientPrompt(e.target.value)} className="bg-white/5 border-white/10 text-white text-sm min-h-[100px] placeholder:text-white/20" rows={4} />
+                        <label className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-white/10 bg-white/5 px-3 py-3 text-xs text-white/45 hover:text-white/70 cursor-pointer">
+                          <UploadCloud className="w-4 h-4" />
+                          {ingredientFile ? ingredientFile.name : "Upload reference image"}
+                          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(event) => setIngredientFile(event.target.files?.[0] ?? null)} />
+                        </label>
                         <Button type="submit" className="w-full bg-white text-black hover:bg-white/90 h-10 rounded-xl" disabled={generatingImage}>
-                          {generatingImage ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Generating...</> : <><Sparkles className="w-4 h-4 mr-2" /> Generate</>}
+                          {generatingImage ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving...</> : <><Sparkles className="w-4 h-4 mr-2" /> {ingredientFile ? "Save Reference" : "Generate"}</>}
                         </Button>
                       </form>
                     </DialogContent>

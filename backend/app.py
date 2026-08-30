@@ -3,6 +3,7 @@ import uuid
 import json
 import time
 import urllib.parse
+from pathlib import Path
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from supabase import create_client
@@ -35,10 +36,39 @@ def get_user_id():
             pass
     return "anonymous"
 
+def storage_upload(bucket, file_name, content, content_type):
+    safe_name = file_name.replace("\\", "/").lstrip("/")
+    response = httpx.post(
+        f"{os.environ['SUPABASE_URL'].rstrip('/')}/storage/v1/object/{bucket}/{safe_name}",
+        headers={
+            "apikey": os.environ["SUPABASE_SERVICE_KEY"],
+            "Authorization": f"Bearer {os.environ['SUPABASE_SERVICE_KEY']}",
+            "Content-Type": content_type,
+            "x-upsert": "true",
+        },
+        content=content,
+        timeout=60,
+    )
+    response.raise_for_status()
+    return f"{os.environ['SUPABASE_URL'].rstrip('/')}/storage/v1/object/public/{bucket}/{safe_name}"
+
 # ── Health ──────────────────────────────────────────────
 @app.route("/api/health")
 def health():
     return jsonify({"status": "ok", "service": "cinevo"})
+
+@app.route("/api/accounts/status")
+def account_status():
+    return jsonify({
+        "supabase": {"connected": bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_KEY"))},
+        "github_actions": {"connected": bool(os.environ.get("GITHUB_TOKEN")), "workflow": "generate-video.yml"},
+        "kaggle": {
+            "connected_accounts": len([k for k in ("KAGGLE_ACCOUNT_1_KEY", "KAGGLE_ACCOUNT_2_KEY") if os.environ.get(k)]),
+            "mode": "pending_real_wan_inference",
+        },
+        "huggingface": {"connected": bool(os.environ.get("HF_TOKEN")), "mode": "pending_zerogpu_space"},
+        "storage": {"video_bucket": "videos", "image_bucket": "images"},
+    })
 
 # ── Projects ────────────────────────────────────────────
 @app.route("/api/projects", methods=["GET"])
@@ -136,6 +166,27 @@ def generate_ingredient():
     url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={w}&height={h}&model=flux&nologo=true&seed={seed}"
     return jsonify({"image_url": url, "prompt": prompt})
 
+@app.route("/api/ingredients/upload", methods=["POST"])
+def upload_ingredient_image():
+    if "file" not in request.files:
+        return jsonify({"error": "file is required"}), 400
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "filename is required"}), 400
+
+    suffix = Path(file.filename).suffix.lower() or ".jpg"
+    if suffix not in (".jpg", ".jpeg", ".png", ".webp"):
+        return jsonify({"error": "Only jpg, png, and webp are supported"}), 400
+
+    content = file.read()
+    if len(content) > 8 * 1024 * 1024:
+        return jsonify({"error": "Max upload size is 8MB"}), 400
+
+    content_type = file.content_type or "application/octet-stream"
+    name = f"ingredients/{uuid.uuid4().hex}{suffix}"
+    url = storage_upload("images", name, content, content_type)
+    return jsonify({"image_url": url})
+
 # ── Collections ─────────────────────────────────────────
 @app.route("/api/collections", methods=["GET"])
 def list_collections():
@@ -181,8 +232,14 @@ def generate_video():
     }
     get_sb().table("clips").insert(clip).execute()
 
+    reference_images = []
+    ingredient_ids = data.get("ingredient_ids", []) or []
+    if ingredient_ids:
+        refs = get_sb().table("ingredients").select("id,image_url,name").in_("id", ingredient_ids[:3]).execute()
+        reference_images = refs.data or []
+
     try:
-        trigger_github_action(data, job_id, clip_id)
+        trigger_github_action(data, job_id, clip_id, reference_images)
     except Exception:
         pass
 
@@ -243,7 +300,7 @@ def reorder_clips(project_id):
 @app.route("/api/projects/<project_id>/clips/<clip_id>", methods=["PUT"])
 def update_clip(project_id, clip_id):
     data = request.json or {}
-    allowed = {k: v for k, v in data.items() if k in ("position", "prompt", "duration_sec", "camera_settings", "status", "video_url")}
+    allowed = {k: v for k, v in data.items() if k in ("position", "prompt", "duration_sec", "camera_settings", "status", "video_url", "thumbnail_url")}
     if "camera_settings" in allowed and isinstance(allowed["camera_settings"], dict):
         allowed["camera_settings"] = json.dumps(allowed["camera_settings"])
     if allowed:
@@ -331,7 +388,7 @@ def export_status(project_id):
     return jsonify(result.data[0])
 
 # ── GitHub Actions Trigger ──────────────────────────────
-def trigger_github_action(data, job_id, clip_id):
+def trigger_github_action(data, job_id, clip_id, reference_images=None):
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         return
@@ -346,6 +403,7 @@ def trigger_github_action(data, job_id, clip_id):
             "clip_id": clip_id,
             "prompt": data.get("prompt", ""),
             "ingredient_ids": data.get("ingredient_ids", []),
+            "reference_images": reference_images or [],
             "camera_settings": data.get("camera_settings", {}),
             "duration_sec": data.get("duration_sec", 8),
             "aspect_ratio": data.get("aspect_ratio", "16:9"),
