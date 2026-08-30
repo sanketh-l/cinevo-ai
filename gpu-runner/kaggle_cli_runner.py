@@ -42,7 +42,7 @@ def get_clip_status():
 
 def build_notebook():
     code = f'''
-import os, requests, traceback
+import os, sys, requests, traceback, json
 PROMPT = {repr(PROMPT)}
 CLIP_ID = {repr(CLIP_ID)}
 JOB_ID = {repr(JOB_ID)}
@@ -55,35 +55,29 @@ HEADERS = {{"apikey": SUPABASE_KEY, "Authorization": f"Bearer {{SUPABASE_KEY}}"}
 
 def safe_patch(data):
     try:
-        requests.patch(f"{{SUPABASE_URL}}/rest/v1/clips?id=eq.{{CLIP_ID}}",
+        r = requests.patch(f"{{SUPABASE_URL}}/rest/v1/clips?id=eq.{{CLIP_ID}}",
             headers={{**HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"}},
             json=data, timeout=30)
-    except:
-        pass
+        print(f"PATCH {{data}} -> {{r.status_code}}")
+    except Exception as e:
+        print(f"PATCH failed: {{e}}")
 
-def update_clip(status, url=None, error=None):
-    p = {{"status": status}}
-    if url: p["video_url"] = url
-    if error: p["camera_settings"] = {{"error": str(error)[:500]}}
-    safe_patch(p)
+safe_patch({{"status": "generating"}})
 
 import imageio, numpy as np
 
+has_cuda = False
 try:
-    update_clip("generating")
-    has_cuda = False
-    try:
-        import torch
-        has_cuda = torch.cuda.is_available()
-        print(f"CUDA: {{has_cuda}}")
-        if has_cuda:
-            print(f"GPU: {{torch.cuda.get_device_name(0)}}")
-            print(f"VRAM: {{torch.cuda.get_device_properties(0).total_mem / 1e9:.1f}}GB")
-    except Exception as e:
-        print(f"torch check failed: {{e}}")
-
+    import torch
+    has_cuda = torch.cuda.is_available()
+    print(f"CUDA: {{has_cuda}}")
     if has_cuda:
-        import torch
+        print(f"GPU: {{torch.cuda.get_device_name(0)}}")
+except Exception as e:
+    print(f"torch unavailable: {{e}}")
+
+try:
+    if has_cuda:
         from diffusers import WanPipeline
         print("Loading Wan2.1-T2V-1.3B model...")
         pipe = WanPipeline.from_pretrained("Wan-AI/Wan2.1-T2V-1.3B", torch_dtype=torch.float16)
@@ -99,53 +93,47 @@ try:
             if a.ndim == 3 and a.shape[0] in [1,3]: a = np.transpose(a,(1,2,0))
             vf.append((a*255).astype(np.uint8))
     else:
-        print("No GPU available - generating stylized fallback video")
+        print("No GPU - generating fallback video")
         vf = []
         ys = np.arange(HEIGHT).reshape(-1, 1)
         xs = np.arange(WIDTH).reshape(1, -1)
-        dx = (xs - WIDTH / 2) / WIDTH
-        dy = (ys - HEIGHT / 2) / HEIGHT
+        dx = (xs - WIDTH / 2.0) / WIDTH
+        dy = (ys - HEIGHT / 2.0) / HEIGHT
         for i in range(NUM_FRAMES):
             t = i / max(NUM_FRAMES - 1, 1)
-            r = int(20 + 60 * t)
-            g = int(40 + 80 * (1 - t))
-            b = int(100 + 100 * t)
-            v = (128 + 127 * np.sin(dx * 10 + t * 6.28 + dy * 8)).astype(np.uint8)
-            frame = np.stack([np.clip(r + v // 3, 0, 255).astype(np.uint8)] * 3, axis=-1)
-            frame[:,:,1] = np.clip(g + v // 4, 0, 255).astype(np.uint8)
-            frame[:,:,2] = np.clip(b + v // 5, 0, 255).astype(np.uint8)
-            vf.append(frame)
+            phase = t * 6.28
+            v = (128 + 127 * np.sin(dx * 10 + phase + dy * 8)).astype(np.uint8)
+            r = np.clip(20 + int(60*t) + v // 3, 0, 255).astype(np.uint8)
+            g = np.clip(40 + int(80*(1-t)) + v // 4, 0, 255).astype(np.uint8)
+            b = np.clip(100 + int(100*t) + v // 5, 0, 255).astype(np.uint8)
+            vf.append(np.stack([r, g, b], axis=-1))
         print(f"Generated {{len(vf)}} fallback frames")
 
     pth = "/kaggle/working/output.mp4"
     imageio.mimsave(pth, vf, fps=16)
-    with open(pth,"rb") as fh: data = fh.read()
-    print(f"Uploading {{len(data)}} bytes to Supabase...")
-    requests.post(f"{{SUPABASE_URL}}/storage/v1/object/videos/{{JOB_ID}}/video.mp4",
+    with open(pth, "rb") as fh:
+        data = fh.read()
+    print(f"Uploading {{len(data)}} bytes...")
+    r = requests.post(
+        f"{{SUPABASE_URL}}/storage/v1/object/videos/{{JOB_ID}}/video.mp4",
         headers={{**HEADERS, "Content-Type": "video/mp4", "x-upsert": "true"}},
-        data=data, timeout=120)
+        data=data, timeout=180
+    )
+    print(f"Upload: {{r.status_code}}")
     url = f"{{SUPABASE_URL}}/storage/v1/object/public/videos/{{JOB_ID}}/video.mp4"
-    update_clip("ready", url)
+    safe_patch({{"status": "ready", "video_url": url}})
     print(f"DONE: {{url}}")
 except BaseException as e:
     tb = traceback.format_exc()
     print(f"FAILED: {{e}}")
-    print(f"TRACEBACK: {{tb}}")
-    try:
-        requests.post(f"{{SUPABASE_URL}}/storage/v1/object/audio/{{JOB_ID}}_error.txt",
-            headers={{**HEADERS, "Content-Type": "text/plain", "x-upsert": "true"}},
-            data=tb.encode()[:2000], timeout=30)
-    except:
-        pass
-    update_clip("failed", error=tb[-500:])
+    print(tb)
+    safe_patch({{"status": "failed", "camera_settings": {{"error": tb[-400:]}}}})
 '''
     return {
         "cells": [
             {"cell_type": "markdown", "metadata": {}, "source": ["# Cinevo Wan 2.1 Inference"]},
             {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
-             "source": ["!pip install -q imageio imageio-ffmpeg numpy 2>/dev/null\n",
-                         "!pip install -q torch torchvision diffusers transformers accelerate safetensors 2>/dev/null\n",
-                         "print('deps installed')"]},
+             "source": ["import imageio, numpy; print('OK:', imageio.__version__, numpy.__version__)"]},
             {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
              "source": [code]},
         ],
